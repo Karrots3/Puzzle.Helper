@@ -1,0 +1,29 @@
+{
+    "min_piece_size": 50,
+    "edge_detection_threshold": 0.1,
+    "matching_threshold": 0.8,
+    "max_iterations": 1000,
+    "debug_mode": false,
+    "visualization": {
+        "figure_size": [15, 12],
+        "dpi": 300,
+        "save_format": "png"
+    },
+    "image_processing": {
+        "max_image_size": 1024,
+        "noise_reduction_strength": 0.1,
+        "contrast_enhancement": true
+    },
+    "piece_detection": {
+        "min_contour_area": 500,
+        "max_contour_area": 50000,
+        "corner_detection_threshold": 0.05
+    },
+    "matching": {
+        "feature_weight": 0.3,
+        "edge_weight": 0.3,
+        "color_weight": 0.2,
+        "pattern_weight": 0.2,
+        "min_compatibility_score": 0.6
+    }
+}
