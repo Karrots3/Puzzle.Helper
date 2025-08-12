@@ -80,12 +80,14 @@ class PuzzleSolver:
         self.logger.info(f"Successfully loaded {len(pieces)} puzzle pieces")
         return pieces
     
-    def solve(self, pieces: List[np.ndarray]) -> Dict:
+    def solve(self, pieces: List[np.ndarray], save_detected_pieces: bool = False, pieces_output_dir: str = None) -> Dict:
         """
         Solve the puzzle by finding the correct arrangement of pieces.
         
         Args:
             pieces: List of puzzle piece images
+            save_detected_pieces: Whether to save detected pieces as images
+            pieces_output_dir: Directory to save detected pieces (if save_detected_pieces is True)
             
         Returns:
             Dictionary containing the solution and metadata
@@ -97,8 +99,12 @@ class PuzzleSolver:
         
         # Step 1: Detect and extract individual pieces
         detected_pieces = []
+        all_detected_images = []  # Store all detected piece images for saving
+        
         for i, piece in enumerate(pieces):
             detected = self.piece_detector.detect_pieces(piece)
+            all_detected_images.extend(detected)  # Add to list for saving
+            
             for j, detected_piece in enumerate(detected):
                 detected_pieces.append({
                     'id': f"{i}_{j}",
@@ -107,6 +113,16 @@ class PuzzleSolver:
                 })
         
         self.logger.info(f"Detected {len(detected_pieces)} individual pieces")
+        
+        # Save detected pieces if requested
+        saved_piece_paths = []
+        if save_detected_pieces and pieces_output_dir:
+            saved_piece_paths = self.piece_detector.save_detected_pieces(
+                all_detected_images, 
+                pieces_output_dir, 
+                prefix="detected_piece"
+            )
+            self.logger.info(f"Saved {len(saved_piece_paths)} detected pieces to {pieces_output_dir}")
         
         # Step 2: Analyze piece edges and find matches
         matches = self.matcher.find_matches(detected_pieces)
@@ -119,10 +135,12 @@ class PuzzleSolver:
             'pieces': detected_pieces,
             'matches': matches,
             'solution': solution,
+            'saved_piece_paths': saved_piece_paths,
             'metadata': {
                 'total_pieces': len(detected_pieces),
                 'total_matches': len(matches),
-                'grid_size': solution.get('grid_size', (0, 0))
+                'grid_size': solution.get('grid_size', (0, 0)),
+                'pieces_saved': len(saved_piece_paths)
             }
         }
     
@@ -243,6 +261,71 @@ class PuzzleSolver:
             json.dump(serializable_solution, f, indent=2)
         
         self.logger.info(f"Solution saved to: {output_path}")
+    
+    def save_detected_pieces(self, pieces: List[np.ndarray], output_dir: str, prefix: str = "piece") -> List[str]:
+        """
+        Save detected puzzle pieces as individual image files.
+        
+        Args:
+            pieces: List of puzzle piece images
+            output_dir: Directory to save the piece images
+            prefix: Prefix for the saved image filenames
+            
+        Returns:
+            List of saved image file paths
+        """
+        return self.piece_detector.save_detected_pieces(pieces, output_dir, prefix)
+    
+    def detect_and_save_pieces(self, input_path: str, output_dir: str, prefix: str = "detected_piece") -> Dict:
+        """
+        Detect puzzle pieces from input images and save them as individual files.
+        
+        Args:
+            input_path: Path to directory containing puzzle images
+            output_dir: Directory to save detected pieces
+            prefix: Prefix for saved image filenames
+            
+        Returns:
+            Dictionary containing detection results and saved file paths
+        """
+        self.logger.info(f"Detecting and saving puzzle pieces from: {input_path}")
+        
+        # Load pieces from input directory
+        pieces = self.load_pieces(input_path)
+        
+        if not pieces:
+            self.logger.warning("No pieces found to detect")
+            return {
+                'detected_pieces': [],
+                'saved_paths': [],
+                'metadata': {
+                    'total_input_pieces': 0,
+                    'total_detected_pieces': 0,
+                    'total_saved_pieces': 0
+                }
+            }
+        
+        # Detect pieces from each input image
+        all_detected_pieces = []
+        for i, piece in enumerate(pieces):
+            detected = self.piece_detector.detect_pieces(piece)
+            all_detected_pieces.extend(detected)
+            self.logger.debug(f"Detected {len(detected)} pieces from input {i}")
+        
+        # Save detected pieces
+        saved_paths = self.save_detected_pieces(all_detected_pieces, output_dir, prefix)
+        
+        self.logger.info(f"Detection and saving completed: {len(saved_paths)} pieces saved")
+        
+        return {
+            'detected_pieces': all_detected_pieces,
+            'saved_paths': saved_paths,
+            'metadata': {
+                'total_input_pieces': len(pieces),
+                'total_detected_pieces': len(all_detected_pieces),
+                'total_saved_pieces': len(saved_paths)
+            }
+        }
     
     def _make_serializable(self, obj):
         """Convert numpy arrays and other non-serializable objects to serializable format."""

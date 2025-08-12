@@ -4,6 +4,7 @@ Puzzle piece detection and feature extraction module.
 
 import cv2
 import numpy as np
+import os
 from typing import List, Dict, Tuple, Optional
 from skimage import measure, morphology
 import logging
@@ -370,3 +371,80 @@ class PieceDetector:
             Normalized piece image
         """
         return self.image_processor.normalize_piece(piece, target_size)
+    
+    def save_detected_pieces(self, pieces: List[np.ndarray], output_dir: str, prefix: str = "piece") -> List[str]:
+        """
+        Save detected puzzle pieces as individual image files.
+        
+        Args:
+            pieces: List of detected puzzle piece images
+            output_dir: Directory to save the piece images
+            prefix: Prefix for the saved image filenames
+            
+        Returns:
+            List of saved image file paths
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            self.logger.info(f"Created output directory: {output_dir}")
+        
+        saved_paths = []
+        
+        for i, piece in enumerate(pieces):
+            # Generate filename
+            filename = f"{prefix}_{i:04d}.png"
+            file_path = os.path.join(output_dir, filename)
+            
+            try:
+                # Convert BGR to RGB if needed (OpenCV uses BGR)
+                if len(piece.shape) == 3 and piece.shape[2] == 3:
+                    piece_rgb = cv2.cvtColor(piece, cv2.COLOR_BGR2RGB)
+                else:
+                    piece_rgb = piece
+                
+                # Save the piece image
+                cv2.imwrite(file_path, piece_rgb)
+                saved_paths.append(file_path)
+                self.logger.debug(f"Saved piece {i}: {file_path}")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to save piece {i}: {e}")
+        
+        self.logger.info(f"Successfully saved {len(saved_paths)} puzzle pieces to {output_dir}")
+        return saved_paths
+    
+    def save_piece_with_metadata(self, piece: np.ndarray, output_path: str, metadata: Dict = None) -> bool:
+        """
+        Save a single puzzle piece with optional metadata.
+        
+        Args:
+            piece: Puzzle piece image to save
+            output_path: Path where to save the image
+            metadata: Optional metadata to include in filename
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Convert BGR to RGB if needed
+            if len(piece.shape) == 3 and piece.shape[2] == 3:
+                piece_rgb = cv2.cvtColor(piece, cv2.COLOR_BGR2RGB)
+            else:
+                piece_rgb = piece
+            
+            # Save the image
+            success = cv2.imwrite(output_path, piece_rgb)
+            
+            if success:
+                self.logger.debug(f"Saved piece with metadata: {output_path}")
+                return True
+            else:
+                self.logger.error(f"Failed to save piece: {output_path}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error saving piece {output_path}: {e}")
+            return False

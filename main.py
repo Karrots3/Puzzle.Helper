@@ -77,6 +77,8 @@ Examples:
   python main.py --input data/sample_pieces --output data/results
   python main.py --input puzzle_photos/ --output solution/ --verbose
   python main.py --input pieces/ --output results/ --save-solution --visualize
+  python main.py --input data/ --detect-only --pieces-output-dir data/results/pieces
+  python main.py --input data/ --save-detected-pieces --pieces-output-dir data/results/pieces
         """
     )
     
@@ -101,25 +103,49 @@ Examples:
     parser.add_argument(
         '--save-solution',
         action='store_true',
+        default=True,
         help='Save solution data to JSON file'
     )
     
     parser.add_argument(
         '--visualize',
         action='store_true',
+        default=True,
         help='Generate and save visualization plots'
     )
     
     parser.add_argument(
         '--save-image',
         action='store_true',
+        default=True,
         help='Save solution as an image file'
     )
     
     parser.add_argument(
         '--animation',
         action='store_true',
+        default=True,
         help='Create animation of puzzle assembly process'
+    )
+    
+    parser.add_argument(
+        '--save-detected-pieces',
+        action='store_true',
+        default=True,
+        help='Save detected puzzle pieces as individual image files'
+    )
+    
+    parser.add_argument(
+        '--pieces-output-dir',
+        default='data/results/detected_pieces',
+        help='Directory to save detected puzzle pieces (default: data/results/detected_pieces)'
+    )
+    
+    parser.add_argument(
+        '--detect-only',
+        action='store_true',
+        default=True,
+        help='Only detect and save puzzle pieces without solving the puzzle'
     )
     
     parser.add_argument(
@@ -156,6 +182,32 @@ Examples:
         logger.info("Initializing puzzle solver")
         solver = PuzzleSolver(config=config)
         
+        # Handle detect-only mode
+        if args.detect_only:
+            logger.info("Running in detect-only mode")
+            result = solver.detect_and_save_pieces(
+                args.input, 
+                args.pieces_output_dir, 
+                prefix="detected_piece"
+            )
+            
+            metadata = result.get('metadata', {})
+            logger.info("Piece detection completed!")
+            logger.info(f"Input pieces processed: {metadata.get('total_input_pieces', 0)}")
+            logger.info(f"Pieces detected: {metadata.get('total_detected_pieces', 0)}")
+            logger.info(f"Pieces saved: {metadata.get('total_saved_pieces', 0)}")
+            logger.info(f"Saved to: {args.pieces_output_dir}")
+            
+            # Save detection results
+            if args.save_solution:
+                detection_path = os.path.join(args.output, 'detection_results.json')
+                import json
+                with open(detection_path, 'w') as f:
+                    json.dump(result, f, indent=2)
+                logger.info(f"Detection results saved to: {detection_path}")
+            
+            return
+        
         # Load puzzle pieces
         logger.info("Loading puzzle pieces")
         pieces = solver.load_pieces(args.input)
@@ -168,7 +220,11 @@ Examples:
         
         # Solve the puzzle
         logger.info("Solving puzzle")
-        solution = solver.solve(pieces)
+        solution = solver.solve(
+            pieces, 
+            save_detected_pieces=args.save_detected_pieces,
+            pieces_output_dir=args.pieces_output_dir if args.save_detected_pieces else None
+        )
         
         # Display solution summary
         metadata = solution.get('metadata', {})
@@ -176,6 +232,12 @@ Examples:
         logger.info(f"Total pieces processed: {metadata.get('total_pieces', 0)}")
         logger.info(f"Total matches found: {metadata.get('total_matches', 0)}")
         logger.info(f"Grid size: {metadata.get('grid_size', (0, 0))}")
+        
+        # Display information about saved pieces
+        if args.save_detected_pieces:
+            pieces_saved = metadata.get('pieces_saved', 0)
+            logger.info(f"Detected pieces saved: {pieces_saved}")
+            logger.info(f"Pieces saved to: {args.pieces_output_dir}")
         
         # Save solution data
         if args.save_solution:
