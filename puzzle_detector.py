@@ -34,12 +34,9 @@ class PuzzleDetector:
         # Remove small noise first
         img_cleaned = cv2.morphologyEx(img_binary, cv2.MORPH_OPEN, kernel)
         
-        # Close small gaps within individual pieces (but not between pieces)
-        img_closed = cv2.morphologyEx(img_cleaned, cv2.MORPH_CLOSE, kernel)
-        
-        # Use erosion to separate pieces that might be touching
-        kernel_erode = np.ones((2, 2), np.uint8)
-        img_eroded = cv2.erode(img_closed, kernel_erode, iterations=1)
+        # Use more aggressive erosion to separate pieces
+        kernel_erode = np.ones((3, 3), np.uint8)
+        img_eroded = cv2.erode(img_cleaned, kernel_erode, iterations=2)
         
         # Then dilate back to restore piece size
         img_dilated = cv2.dilate(img_eroded, kernel_erode, iterations=1)
@@ -50,7 +47,6 @@ class PuzzleDetector:
             'blurred': img_blurred,
             'binary': img_binary,
             'cleaned': img_cleaned,
-            'closed': img_closed,
             'eroded': img_eroded,
             'final': img_dilated
         }
@@ -91,6 +87,51 @@ class PuzzleDetector:
                 valid_contours.append(contour)
         
         return valid_contours
+    
+    def preprocess_with_connected_components(self, img_rgb):
+        """
+        Preprocessing using connected components to separate pieces
+        """
+        # Convert to grayscale
+        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur
+        img_blurred = cv2.GaussianBlur(img_gray, (5, 5), 0)
+        
+        # Adaptive thresholding
+        img_binary = cv2.adaptiveThreshold(
+            img_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # Remove small noise
+        kernel = np.ones((3, 3), np.uint8)
+        img_cleaned = cv2.morphologyEx(img_binary, cv2.MORPH_OPEN, kernel)
+        
+        # Find connected components
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_cleaned, connectivity=8)
+        
+        # Create a new image with only the largest components (excluding background)
+        img_components = np.zeros_like(img_cleaned)
+        
+        # Filter components by area (exclude very small and very large ones)
+        min_area = 1000
+        max_area = img_cleaned.shape[0] * img_cleaned.shape[1] // 4  # Max 25% of image
+        
+        for i in range(1, num_labels):  # Skip background (label 0)
+            area = stats[i, cv2.CC_STAT_AREA]
+            if min_area < area < max_area:
+                img_components[labels == i] = 255
+        
+        return {
+            'original': img_rgb,
+            'gray': img_gray,
+            'binary': img_binary,
+            'cleaned': img_cleaned,
+            'labels': labels,
+            'stats': stats,
+            'final': img_components
+        }
     
     def preprocess_with_watershed(self, img_rgb):
         """
@@ -216,23 +257,33 @@ class PuzzleDetector:
         if hasattr(self, 'method') and self.method != 'auto':
             method_used = self.method
         else:
-            # Try both preprocessing methods
+            # Try all preprocessing methods
             processed_morph = self.preprocess_image(img_rgb)
             processed_watershed = self.preprocess_with_watershed(img_rgb)
+            processed_components = self.preprocess_with_connected_components(img_rgb)
             
-            # Find contours with both methods
+            # Find contours with all methods
             contours_morph = self.find_contours(processed_morph['final'])
             contours_watershed = self.find_contours(processed_watershed['final'])
+            contours_components = self.find_contours(processed_components['final'])
             
             # Choose the method that finds more pieces (but not too many)
-            if len(contours_morph) > len(contours_watershed) and len(contours_morph) <= 200:
-                method_used = 'morphological'
+            best_count = max(len(contours_morph), len(contours_watershed), len(contours_components))
+            if best_count <= 200:
+                if len(contours_components) == best_count:
+                    method_used = 'connected_components'
+                elif len(contours_morph) == best_count:
+                    method_used = 'morphological'
+                else:
+                    method_used = 'watershed'
             else:
-                method_used = 'watershed'
+                method_used = 'watershed'  # Default to watershed if too many
         
         # Apply the chosen method
         if method_used == 'morphological':
             processed = self.preprocess_image(img_rgb)
+        elif method_used == 'connected_components':
+            processed = self.preprocess_with_connected_components(img_rgb)
         else:  # watershed
             processed = self.preprocess_with_watershed(img_rgb)
         
@@ -294,9 +345,13 @@ class PuzzleDetector:
         axes[0, 2].set_title('Cleaned (Opening)')
         axes[0, 2].axis('off')
         
-        # Eroded (separate pieces)
-        axes[0, 3].imshow(processed['eroded'], cmap='gray')
-        axes[0, 3].set_title('Eroded (Separate)')
+        # Final processed or eroded
+        if 'eroded' in processed:
+            axes[0, 3].imshow(processed['eroded'], cmap='gray')
+            axes[0, 3].set_title('Eroded (Separate)')
+        else:
+            axes[0, 3].imshow(processed['final'], cmap='gray')
+            axes[0, 3].set_title('Final Processed')
         axes[0, 3].axis('off')
         
         # Contours on original
@@ -420,7 +475,7 @@ def main():
     parser.add_argument('--data-folder', default='data', help='Folder containing images')
     parser.add_argument('--image', help='Specific image to process (optional)')
     parser.add_argument('--no-viz', action='store_true', help='Skip visualization')
-    parser.add_argument('--method', choices=['auto', 'morphological', 'watershed'], 
+    parser.add_argument('--method', choices=['auto', 'morphological', 'watershed', 'connected_components'], 
                        default='auto', help='Preprocessing method to use')
     
     args = parser.parse_args()
