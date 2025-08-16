@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 import argparse
 
+DEBUG=False
+DEBUG=True
+
 class PuzzleDetector:
     def __init__(self, data_folder="data"):
         self.data_folder = Path(data_folder)
@@ -24,6 +27,11 @@ class PuzzleDetector:
         
         # Adaptive thresholding (the method you liked)
         img_binary = cv2.adaptiveThreshold(
+            img_gray , 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+
+        img_binary_blurred = cv2.adaptiveThreshold(
             img_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
             cv2.THRESH_BINARY, 11, 2
         )
@@ -33,61 +41,67 @@ class PuzzleDetector:
         
         # Remove small noise first
         img_cleaned = cv2.morphologyEx(img_binary, cv2.MORPH_OPEN, kernel)
+        img_cleaned_blurred = cv2.morphologyEx(img_binary_blurred, cv2.MORPH_OPEN, kernel)
         
         # Use more aggressive erosion to separate pieces
         kernel_erode = np.ones((3, 3), np.uint8)
         img_eroded = cv2.erode(img_cleaned, kernel_erode, iterations=2)
+        img_eroded_blurred = cv2.erode(img_cleaned_blurred, kernel_erode, iterations=2)
         
         # Then dilate back to restore piece size
         img_dilated = cv2.dilate(img_eroded, kernel_erode, iterations=1)
+        img_dilated_blurred = cv2.dilate(img_eroded_blurred, kernel_erode, iterations=1)
         
+        if DEBUG:
+            # Create a single figure with subplots
+            fig, axes = plt.subplots(3, 4, figsize=(16, 12))
+            fig.suptitle('Image Processing Pipeline', fontsize=16, fontweight='bold')
+            
+            # Flatten axes for easier indexing
+            axes = axes.flatten()
+        
+            # Plot each processing step with titles
+            images = [
+                (img_gray, 'Grayscale'),
+                (img_blurred, 'Gaussian Blur'),
+                (img_binary, 'Binary Threshold'),
+                (img_binary_blurred, 'Binary + Blur'),
+                (img_cleaned, 'Morphological Clean'),
+                (img_cleaned_blurred, 'Clean + Blur'),
+                (img_eroded, 'Eroded'),
+                (img_dilated, 'Dilated'),
+                (img_dilated_blurred, 'Final Result')
+            ]
+            
+            for i, (img, title) in enumerate(images):
+                if i < len(axes):
+                    axes[i].imshow(img)
+                    axes[i].set_title(title, fontsize=12, fontweight='bold')
+                    axes[i].axis('off')
+            
+            # Hide unused subplots
+            for i in range(len(images), len(axes)):
+                axes[i].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+            # TOP performing are cleaned+blur and binary+blur
+
         return {
             'original': img_rgb,
             'gray': img_gray,
             'blurred': img_blurred,
             'binary': img_binary,
+            'binary_blurred': img_binary_blurred,
             'cleaned': img_cleaned,
+            'cleaned_blurred': img_cleaned_blurred,
             'eroded': img_eroded,
-            'final': img_dilated
+            'eroded_blurred': img_eroded_blurred,
+            'dilated': img_dilated,
+            'final': img_cleaned_blurred
         }
     
-    def find_contours(self, img_binary):
-        """
-        Find contours in the binary image
-        """
-        # Find contours
-        contours, hierarchy = cv2.findContours(
-            img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        
-        # Filter contours by area to remove noise
-        min_area = 1000  # Adjust based on your puzzle piece size
-        valid_contours = []
-        
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > min_area:
-                valid_contours.append(contour)
-        
-        return valid_contours
-    
-    def find_contours_with_adaptive_threshold(self, img_binary, min_area=1000):
-        """
-        Find contours with adaptive area thresholding
-        """
-        contours, hierarchy = cv2.findContours(
-            img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        
-        # Filter contours by area
-        valid_contours = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > min_area:
-                valid_contours.append(contour)
-        
-        return valid_contours
-    
+
     def preprocess_with_connected_components(self, img_rgb):
         """
         Preprocessing using connected components to separate pieces
@@ -122,6 +136,33 @@ class PuzzleDetector:
             area = stats[i, cv2.CC_STAT_AREA]
             if min_area < area < max_area:
                 img_components[labels == i] = 255
+        
+        if DEBUG:
+            images = [
+                (img_gray, 'Grayscale'),
+                (img_blurred, 'Gaussian Blur'),
+                (img_binary, 'Binary Threshold'),
+                (img_cleaned, 'Morphological Clean'),
+                (img_components, 'Final Result')
+            ]
+    
+            fig, axes = plt.subplots(3, 4, figsize=(16, 12))
+            fig.suptitle('Image Processing connected components', fontsize=16, fontweight='bold')
+            axes = axes.flatten()
+
+            for i, (img, title) in enumerate(images):
+                if i < len(axes):
+                    axes[i].imshow(img)
+                    axes[i].set_title(title, fontsize=12, fontweight='bold')
+                    axes[i].axis('off')
+            
+            # Hide unused subplots
+            for i in range(len(images), len(axes)):
+                axes[i].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+
         
         return {
             'original': img_rgb,
@@ -181,7 +222,33 @@ class PuzzleDetector:
         # Create binary image from watershed result
         img_watershed = np.zeros_like(img_cleaned)
         img_watershed[markers > 1] = 255
-        
+
+        if DEBUG:
+            fig, axes = plt.subplots(3, 4, figsize=(16, 12))
+            fig.suptitle('Image Processing watershed', fontsize=16, fontweight='bold')
+
+            images = [
+                (img_gray, 'Grayscale'),
+                (img_blurred, 'Gaussian Blur'),
+                (img_binary, 'Binary Threshold'),
+                (img_cleaned, 'Morphological Clean'),
+                (img_watershed, 'Watershed')
+            ]
+
+            axes = axes.flatten()
+            for i, (img, title) in enumerate(images):
+                if i < len(axes):
+                    axes[i].imshow(img)
+                    axes[i].set_title(title, fontsize=12, fontweight='bold')
+                    axes[i].axis('off')
+            
+            # Hide unused subplots
+            for i in range(len(images), len(axes)):
+                axes[i].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+
         return {
             'original': img_rgb,
             'gray': img_gray,
@@ -193,11 +260,116 @@ class PuzzleDetector:
             'markers': markers,
             'final': img_watershed
         }
+
+    def preprocess_with_canny(self, img_rgb):
+        """
+        Preprocessing using Canny edge detection to separate pieces
+        """
+        # Convert to grayscale
+        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        
+        
+        # Apply Gaussian blur
+        img_blurred = cv2.GaussianBlur(img_gray, (5, 5), 0)
+        
+        # Canny edge detection
+        img_edges = cv2.Canny(img_blurred, 50, 150)
+
+        img_binary = cv2.adaptiveThreshold(
+            img_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+
+        if DEBUG:
+            fig, axes = plt.subplots(3, 4, figsize=(16, 12))
+            fig.suptitle('Image Processing canny', fontsize=16, fontweight='bold')
+            axes = axes.flatten()
+
+            images = [
+                (img_gray, 'Grayscale'),
+                (img_blurred, 'Gaussian Blur'),
+                (img_binary, 'Binary Threshold'),
+                (img_edges, 'Canny Edges'),
+                (img_binary, 'Binary + Canny')
+            ]
+
+            for i, (img, title) in enumerate(images):
+                if i < len(axes):
+                    axes[i].imshow(img)
+                    axes[i].set_title(title, fontsize=12, fontweight='bold')
+                    axes[i].axis('off')
+            
+            # Hide unused subplots
+            for i in range(len(images), len(axes)):
+                axes[i].axis('off') 
+            
+            plt.tight_layout()
+            plt.show()
+
+        return {
+            'original': img_rgb,
+            'gray': img_gray,
+            'binary': img_binary,
+            'cleaned': img_binary,
+            'blurred': img_blurred,
+            'edges': img_edges,
+            'final': img_edges
+        }
+        
+
+
+    def find_contours(self, img_binary, method, min_area=1000, max_area=None):
+        if method == 'adaptive_threshold':
+            return self._find_contours_with_adaptive_threshold(img_binary, min_area, max_area)
+        else:
+            return self._find_contours(img_binary, min_area, max_area)
+
+
+    def _find_contours(self, img_binary, min_area=1000, max_area=None):
+        """
+        Find contours in the binary image
+        """
+        # Find contours
+        contours, hierarchy = cv2.findContours(
+            img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        
+        # Filter contours by area to remove noise
+        valid_contours = []
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            
+            if area > min_area:
+                valid_contours.append(contour)
+        
+        return valid_contours
+    
+    def _find_contours_with_adaptive_threshold(self, img_binary, min_area=1000, max_area=None):
+        """
+        Find contours with adaptive area thresholding
+        """
+        contours, hierarchy = cv2.findContours(
+            img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+
+        print(hierarchy)
+        
+        # Filter contours by area
+        valid_contours = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > min_area:
+                valid_contours.append(contour)
+        
+        return valid_contours
+    
     
     def analyze_contour(self, contour):
         """
         Analyze a single contour to extract features
         """
+        # THROW ERROR NOT IMPLEMENTED
         # Basic properties
         area = cv2.contourArea(contour)
         perimeter = cv2.arcLength(contour, True)
@@ -246,12 +418,12 @@ class PuzzleDetector:
             print(f"Could not read image: {img_path}")
             return None
         
-        # Resize if too large
-        h, w = img_rgb.shape[:2]
-        if max(h, w) > 2000:
-            scale = 2000 / max(h, w)
-            new_w, new_h = int(w * scale), int(h * scale)
-            img_rgb = cv2.resize(img_rgb, (new_w, new_h))
+        ## Resize if too large
+        #h, w = img_rgb.shape[:2]
+        #if max(h, w) > 2000:
+        #    scale = 2000 / max(h, w)
+        #    new_w, new_h = int(w * scale), int(h * scale)
+        #    img_rgb = cv2.resize(img_rgb, (new_w, new_h))
         
         # Choose preprocessing method
         if hasattr(self, 'method') and self.method != 'auto':
@@ -261,12 +433,13 @@ class PuzzleDetector:
             processed_morph = self.preprocess_image(img_rgb)
             processed_watershed = self.preprocess_with_watershed(img_rgb)
             processed_components = self.preprocess_with_connected_components(img_rgb)
-            
+            processed_canny = self.preprocess_with_canny(img_rgb)
             # Find contours with all methods
-            contours_morph = self.find_contours(processed_morph['final'])
-            contours_watershed = self.find_contours(processed_watershed['final'])
-            contours_components = self.find_contours(processed_components['final'])
-            
+            contours_morph = self._find_contours(processed_morph['final'])
+            contours_watershed = self._find_contours(processed_watershed['final'])
+            contours_components = self._find_contours(processed_components['final'])
+            contours_canny = self._find_contours(processed_canny['final'])
+
             # Choose the method that finds more pieces (but not too many)
             best_count = max(len(contours_morph), len(contours_watershed), len(contours_components))
             if best_count <= 200:
@@ -274,8 +447,10 @@ class PuzzleDetector:
                     method_used = 'connected_components'
                 elif len(contours_morph) == best_count:
                     method_used = 'morphological'
-                else:
+                elif len(contours_watershed) == best_count:
                     method_used = 'watershed'
+                else:
+                    method_used = 'canny'
             else:
                 method_used = 'watershed'  # Default to watershed if too many
         
@@ -284,18 +459,29 @@ class PuzzleDetector:
             processed = self.preprocess_image(img_rgb)
         elif method_used == 'connected_components':
             processed = self.preprocess_with_connected_components(img_rgb)
-        else:  # watershed
+        elif method_used == 'watershed':
             processed = self.preprocess_with_watershed(img_rgb)
+        elif method_used == 'canny':
+            processed = self.preprocess_with_canny(img_rgb)
         
-        # Find contours with adaptive thresholding
-        contours = self.find_contours_with_adaptive_threshold(processed['final'])
-        
-        # If too few contours found, try with smaller area threshold
-        if len(contours) < 5:
-            print(f"Only {len(contours)} contours found, trying with smaller area threshold...")
-            contours = self.find_contours_with_adaptive_threshold(processed['final'], min_area=500)
+        adaptive_threshold =True 
+        if adaptive_threshold:
+            # Find contours with adaptive thresholding
+            contours = self._find_contours_with_adaptive_threshold(processed['final'], min_area=1000)
+            
+            # If too few contours found, try with smaller area threshold
             if len(contours) < 5:
-                contours = self.find_contours_with_adaptive_threshold(processed['final'], min_area=200)
+                print(f"Only {len(contours)} contours found, trying with smaller area threshold...")
+                contours = self._find_contours_with_adaptive_threshold(processed['final'], min_area=500)
+                if len(contours) < 5:
+                    contours = self._find_contours_with_adaptive_threshold(processed['final'], min_area=200)
+        else:
+            contours = self._find_contours(processed['final'])
+            # if len(contours) < 5:
+            #     print(f"Only {len(contours)} contours found, trying with smaller area threshold...")
+            #     contours = self._find_contours(processed['final'])
+            #     if len(contours) < 5:
+            #         contours = self._find_contours(processed['final'])
         
         print(f"Using {method_used} method - found {len(contours)} contours")
         
@@ -336,21 +522,21 @@ class PuzzleDetector:
         axes[0, 0].axis('off')
         
         # Binary (adaptive threshold)
-        axes[0, 1].imshow(processed['binary'], cmap='gray')
+        axes[0, 1].imshow(processed['binary'])
         axes[0, 1].set_title('Adaptive Threshold')
         axes[0, 1].axis('off')
         
         # Cleaned (opening)
-        axes[0, 2].imshow(processed['cleaned'], cmap='gray')
+        axes[0, 2].imshow(processed['cleaned'])
         axes[0, 2].set_title('Cleaned (Opening)')
         axes[0, 2].axis('off')
         
         # Final processed or eroded
         if 'eroded' in processed:
-            axes[0, 3].imshow(processed['eroded'], cmap='gray')
+            axes[0, 3].imshow(processed['eroded'])
             axes[0, 3].set_title('Eroded (Separate)')
         else:
-            axes[0, 3].imshow(processed['final'], cmap='gray')
+            axes[0, 3].imshow(processed['final'])
             axes[0, 3].set_title('Final Processed')
         axes[0, 3].axis('off')
         
@@ -475,7 +661,7 @@ def main():
     parser.add_argument('--data-folder', default='data', help='Folder containing images')
     parser.add_argument('--image', help='Specific image to process (optional)')
     parser.add_argument('--no-viz', action='store_true', help='Skip visualization')
-    parser.add_argument('--method', choices=['auto', 'morphological', 'watershed', 'connected_components'], 
+    parser.add_argument('--method', choices=['auto', 'morphological', 'watershed', 'connected_components', 'canny'], 
                        default='auto', help='Preprocessing method to use')
     
     args = parser.parse_args()

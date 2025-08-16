@@ -1,28 +1,62 @@
+# %%
+# # Cuda
+# import cv2
+# gpu_frame = cv2.cuda.GpuMat()
+# gpu_frame.upload(img_rgb)
+# 
+# gpu_canny = cv2.cuda.createCannyEdgeDetector(50, 100)
+# edges_gpu = gpu_canny.detect(gpu_frame)
+# 
+# edges = edges_gpu.download()
+# 
+# cv2.imshow("Edges", edges)
+
+# %%
+from collections import Counter
+from numpy.ma import masked_singleton
+from scipy.signal import find_peaks
+import cv2
+import heapq
+import itertools
+import math
+import math
 import matplotlib.pyplot as plt
 import numpy as np
-import cv2
-import math
-import itertools
-import heapq
-import statistics
-from scipy import stats
-from scipy.signal import find_peaks
-from collections import Counter
+import random
+from pathlib import Path
+from src.utils import plot_images
 
-"""# Add utilities"""
+DEBUG = True
+DEBUG = False
+GET_IMAGE_HSV = False
+MIN_AREA_PIECE = 10000
+FIND_PEAK_PROMINENCE = 500 # REDUCE TO INCREASE NUMBER OF PEAKS DETECTION
+NB_SAMPLES = 9
 
-def imshow(img, title=None):
-    plt.title(title)
-    plt.axis('equal')
-    plt.imshow(img)
-    plt.show()
-
+# %%
+# Classes
 class Item():
     def __init__(self, **kwargs):
         self.update(**kwargs)
 
     def update(self, **kwargs):
         self.__dict__.update(kwargs)
+
+class Piece(Item):
+    def __init__(self, name, **kwargs):
+        super().__init__(**kwargs)
+        self.name = name
+
+    def __str__(self):
+        return f"{self.name}"
+
+class Edge(Item):
+    def __init__(self, id, **kwargs):
+        super().__init__(**kwargs)
+        self.id = id
+
+class Solution(Item):
+    pass
 
 class LoopingList(list):
     def __getitem__(self, i):
@@ -31,200 +65,44 @@ class LoopingList(list):
         else:
             return super().__getitem__(i)
 
-def plot_contour(contour, **kwargs):
-    plt.axis('equal')
-    plt.plot(contour[:, :, 0], -contour[:, :, 1], **kwargs)
 
-def plot_point(point, **kwargs):
-    plot_contour(np.array([[point]]), **kwargs)
+# %% [markdown]
+# # Ingest
 
-def fill_contour(contour, **kwargs):
-    plt.fill(contour[:, :, 0], -contour[:, :, 1], **kwargs)
-
-def get_transform(center, x, y, degrees):
-    matrix = cv2.getRotationMatrix2D(center, degrees, 1)
-    translate = (x, y) - center
-    return (matrix, translate)
-
-def get_contour_transform(contour, idx, x, y, degrees):
-    return get_transform(contour[idx][0], x, y, degrees)
-
-def transform_contour(contour, transform):
-    matrix, translate = transform
-    return cv2.transform(contour, matrix) + translate
-
-def transform_point(point, transform):
-    matrix, translate = transform
-    return (cv2.transform(np.array([[point]]), matrix) + translate)[0, 0]
-
-def sub_contour(c, idx0, idx1):
-    if idx1 > idx0:
-        return c[idx0:idx1]
-    else:
-        return np.concatenate([c[idx0:], c[:idx1]])
-
-"""# Detect pieces"""
-
-def segment_colored_puzzle(img_rgb):
-    """
-    Segment puzzle pieces from a colored image using multiple methods
-    """
-    img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
-    img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-    
-    # Method 1: Adaptive thresholding
-    img_binary_adaptive = cv2.adaptiveThreshold(img_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    
-    # Method 2: Otsu's thresholding (automatic threshold detection)
-    _, img_binary_otsu = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Method 3: Color-based segmentation
-    # Try different color ranges for better detection
-    color_masks = []
-    
-    # Range 1: Bright colors (high value)
-    lower1 = np.array([0, 0, 100])
-    upper1 = np.array([180, 255, 255])
-    mask1 = cv2.inRange(img_hsv, lower1, upper1)
-    color_masks.append(mask1)
-    
-    # Range 2: Saturated colors
-    lower2 = np.array([0, 50, 50])
-    upper2 = np.array([180, 255, 255])
-    mask2 = cv2.inRange(img_hsv, lower2, upper2)
-    color_masks.append(mask2)
-    
-    # Range 3: Non-black colors
-    lower3 = np.array([0, 0, 30])
-    upper3 = np.array([180, 255, 255])
-    mask3 = cv2.inRange(img_hsv, lower3, upper3)
-    color_masks.append(mask3)
-    
-    # Combine color masks
-    color_mask = np.zeros_like(img_gray)
-    for mask in color_masks:
-        color_mask = cv2.bitwise_or(color_mask, mask)
-    
-    # Method 4: Edge detection
-    edges = cv2.Canny(img_gray, 30, 100)
-    kernel = np.ones((3,3), np.uint8)
-    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
-    edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
-    
-    # Combine all methods
-    img_binary = cv2.bitwise_or(img_binary_adaptive, img_binary_otsu)
-    img_binary = cv2.bitwise_or(img_binary, color_mask)
-    img_binary = cv2.bitwise_or(img_binary, edges_closed)
-    
-    # Clean up with morphological operations
-    kernel_clean = np.ones((5,5), np.uint8)
-    img_binary = cv2.morphologyEx(img_binary, cv2.MORPH_CLOSE, kernel_clean)
-    img_binary = cv2.morphologyEx(img_binary, cv2.MORPH_OPEN, kernel_clean)
-    
-    return img_binary, img_binary_adaptive, color_mask, edges_closed
-
-img_rgb = cv2.imread("data/img.jpg")
-h, w = img_rgb.shape[:2]
-img_rgb = cv2.resize(img_rgb, (4*w, 4*h))
-
-# Segment the colored image
-img_binary, img_binary_adaptive, color_mask, edges_closed = segment_colored_puzzle(img_rgb)
-
-# Show the segmentation results for debugging
-plt.figure(figsize=(15, 5))
-plt.subplot(1, 4, 1)
-plt.imshow(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
-plt.title('Original Image')
-plt.axis('off')
-
-plt.subplot(1, 4, 2)
-plt.imshow(img_binary_adaptive, cmap='gray')
-plt.title('Adaptive Threshold')
-plt.axis('off')
-
-plt.subplot(1, 4, 3)
-plt.imshow(color_mask, cmap='gray')
-plt.title('Color Mask')
-plt.axis('off')
-
-plt.subplot(1, 4, 4)
-plt.imshow(img_binary, cmap='gray')
-plt.title('Combined Binary')
-plt.axis('off')
-plt.tight_layout()
-plt.show()
-input()
-
-# def extract_edges(self, image: np.ndarray) -> np.ndarray:
-#     """
-#     Extract edges from the image using Canny edge detection.
-#     
-#     Args:
-#         image: Input image
-#         
-#     Returns:
-#         Edge map as binary image
-#     """
-#     # Convert to grayscale if needed
-#     if len(image.shape) == 3:
-#         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-#     else:
-#         gray = image
-#     
-#     # Apply Gaussian blur
-#     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-#     
-#     # Canny edge detection
-#     edges = cv2.Canny(blurred, 50, 150)
-#     
-#     return edges
-# 
-
-from typing import List
-def find_contours(image: np.ndarray) -> List[np.ndarray]:
-    """
-    Find contours in the image.
-        
-    Args:
-        image: Input image (preferably binary/edge image)
-            
-    Returns:
-        List of contours
-    """
-    # Convert to binary if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = image
-        
-    # Threshold to create binary image
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-    # Find contours
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-    return contours
-# Find contours
+# %%
+from src.preprocessing import ingest_image, preprocessing_hsv
+img_file="data/imgomatch.jpg"
+img_bgr, img_gray = ingest_image(img_file)
 
 
-# contours = cv2.findContours(img_binary_adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
-contours = find_contours(img_binary_adaptive)
+hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+lower_bg = np.array([22, 171, 194])  # tweak
+upper_bg = np.array([23, 157, 221])
+lower_bg = np.array([15, 100, 100])  # more xtreme
+upper_bg = np.array([30, 255, 255])
+
+img_bgr_masked = preprocessing_hsv(img_bgr, lower_bg, upper_bg)
+img_final = img_bgr_masked
+img_final = cv2.cvtColor(img_final, cv2.COLOR_BGR2GRAY)
 
 
-pieces = []
-counter = 0
-for contour in contours:
+# %% [markdown]
+# # Find Pieces
+
+# %%
+pieces: list[Piece] = []
+
+contours, hierarchy = cv2.findContours(img_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+for i, contour in enumerate(contours):
     x, y, w, h = cv2.boundingRect(contour)
     area = cv2.contourArea(contour)
-    if area < 10000:
+    if area < MIN_AREA_PIECE:
         continue
-    # compute piece name from its position
-    # col = int((x - w/2) * 13 / 4540)
-    # row = int(1 + (y - h/2) * 13 / 4450)
-    # name = chr(ord('A') + col) + str(row)
-    name = f"piece_{counter}"
-
-    piece = Item(
+    
+    
+    name = f"piece_{i}"
+    piece = Piece(
         name=name,
         int_contour=contour,
         contour=contour.astype(np.float64),  # convert to float for rotation
@@ -232,31 +110,11 @@ for contour in contours:
     )
     pieces.append(piece)
 
-piece_by_name = dict([(piece.name, piece) for piece in pieces])
-print(f"{len(pieces)} detected pieces.")
 
-imshow(img_rgb)
 
-# show all piece contours
-for piece in pieces:
-    plot_contour(piece.contour)
-
-# show the smallest and biggest pieces by area
-pieces.sort(key= lambda piece: piece.area)
-
-for piece in pieces[:1] + pieces[-1:]:
-    plt.title(f"{piece.name}, area={int(piece.area)}")
-    plot_contour(piece.contour)
-    plt.show()
-
-"""# Detect piece corners
-
-## Find corners via peak distance from center
-"""
-
-for piece in pieces:
+    # Find PEAKS
     (cx, cy), cr = cv2.minEnclosingCircle(piece.int_contour)
-    centered_contour = piece.contour - np.array([cx, cy])
+    centered_contour = piece.int_contour - np.array([cx, cy])
 
     # ensure peaks are not at start or end of the distances array
     distances = np.sum(centered_contour**2, axis=2)[:, 0]
@@ -264,24 +122,14 @@ for piece in pieces:
     shifted_distances = np.concatenate([distances[distance_offset:], distances[:distance_offset]])
 
     # find peak distances
-    peak_indices = [(distance_idx + distance_offset) % len(distances) for distance_idx in find_peaks(shifted_distances, prominence=1000)[0]]
+    peak_indices = [(distance_idx + distance_offset) % len(distances) for distance_idx in find_peaks(shifted_distances, prominence=FIND_PEAK_PROMINENCE)[0]]
     peak_indices.sort()
-    piece.update(center=np.array([cx, cy]),
-                 peak_indices=LoopingList(peak_indices),
-                 )
+    piece.update(
+        center=np.array([cx, cy]),
+        peak_indices=LoopingList(peak_indices),
+    )
 
-# Show the pieces having the smallest / highest number of peak indices
-pieces.sort(key= lambda piece: len(piece.peak_indices))
-
-for piece in pieces[:1] + pieces[-1:]:
-    plt.title(f"{piece.name}, Number of peaks={len(piece.peak_indices)}")
-    plot_contour(piece.contour)
-    plot_contour(piece.contour[piece.peak_indices], marker='o', ls='', color='red')
-    plt.show()
-
-"""## Filter corners by rectangle geometry"""
-
-for piece in pieces:
+    ## Compute rectangle
     def compute_rectangle_error(indices):
             # get coordinates of corners
             corners = LoopingList(np.take(piece.contour, sorted(list(indices)), axis=0)[:, 0, :])
@@ -301,26 +149,29 @@ for piece in pieces:
     piece.update(rectangle_error=error)
     piece.update(corner_indices=LoopingList(indices))
 
-# Show the pieces having the best / worst rectangle
-pieces.sort(key= lambda piece: piece.rectangle_error)
+    # Extract edges
+    def sub_contour(c, idx0, idx1):
+        if idx1 > idx0:
+            return c[idx0:idx1]
+        else:
+            return np.concatenate([c[idx0:], c[:idx1]])
 
-for piece in pieces[:1] + pieces[-1:]:
-    plt.title(f"{piece.name}, Rectangle error={piece.rectangle_error}")
-    plot_contour(piece.contour)
-    plot_contour(piece.contour[piece.peak_indices], marker='o', ls='', color='red')
-    plot_contour(piece.contour[piece.corner_indices], marker='', ls='-', color='red')
-    plt.show()
+    def transform_point(point, transform):
+        matrix, translate = transform
+        return (cv2.transform(np.array([[point]]), matrix) + translate)[0, 0]
 
-# Show all rectangles
-for piece in pieces:
-    plot_contour(piece.contour[piece.corner_indices], marker='', ls='-', color='red')
+    def transform_contour(contour, transform):
+        matrix, translate = transform
+        return cv2.transform(contour, matrix) + translate
 
-"""# Compute edges
+    def get_transform(center, x, y, degrees):
+        matrix = cv2.getRotationMatrix2D(center, degrees, 1)
+        translate = (x, y) - center
+        return (matrix, translate)
 
-## Extract edges
-"""
+    def get_contour_transform(contour, idx, x, y, degrees):
+        return get_transform(contour[idx][0], x, y, degrees)
 
-for piece in pieces:
     edges = LoopingList()
     for quarter in range(4):
         idx0 = piece.corner_indices[quarter]
@@ -351,7 +202,34 @@ for piece in pieces:
             normalized_piece_contour = transform_contour(piece.contour, transform)
             normalized_piece_center = transform_point(piece.center, transform)
 
-        edge = Item(
+        
+        # Calculate integral area of the edge
+        # The integral area is the area between the edge curve and the x-axis (straight line from start to end)
+        edge_points = normalized_edge_contour[:, 0, :]  # Extract (x, y) coordinates
+        x_coords = edge_points[:, 0]
+        y_coords = edge_points[:, 1]
+
+        # Calculate area using the trapezoidal rule
+        # Area = integral of y with respect to x
+        integral_area = np.trapezoid(y_coords, x_coords)
+
+        # Also calculate the signed area (positive above x-axis, negative below)
+        signed_area = integral_area
+
+        # Calculate the absolute area (total area regardless of sign)
+        absolute_area = np.trapezoid(np.abs(y_coords), x_coords)
+
+        # # Sample the edge
+        # edge_contour = sub_contour(normalized_edge_contour, idx0, idx1 + 1)
+        # deltas = edge_contour[1:] - edge_contour[:-1]
+        # distances = np.cumsum(np.sqrt(np.sum(deltas**2, axis=2)))
+        # arc_length = distances[-1]
+        # distance = arc_length / (NB_SAMPLES - 1)  # distance between 2 sample points
+        # get N equidistant points
+        sample_indices = (np.array([np.argmax(distances >= i*distance - 0.0001) for i in range(NB_SAMPLES)]) + edge.idx0) % len(piece.contour)
+
+        edge = Edge(
+            id=f"{piece.name}_{quarter}",
             idx0=idx0,
             idx1=idx1,
             normalized_piece_contour=normalized_piece_contour,
@@ -359,6 +237,9 @@ for piece in pieces:
             angle_degrees=angle_degrees,
             sign=sign,
             straight_length=straight_length,
+            absolute_area=absolute_area,
+            integral_area=integral_area,
+            sample_indices=sample_indices,
         )
         edges.append(edge)
 
@@ -373,86 +254,141 @@ for piece in pieces:
         nb_flats=len([edge for edge in edges if edge.sign == 0])
     )
 
+# %%
+#  Plot for each piece the 4 edges in the same figure
+for piece in pieces:
+    fig, axes = plt.subplots(1, 4, figsize=(15, 5))
+    axes = axes.flatten()
+    # Title piece.name
+    plt.title(piece.name)
+    for edge, ax in zip(piece.edges, axes):
+        ax.plot(piece.contour[:, :, 0], -piece.contour[:, :, 1])
+        ax.plot(sub_contour(piece.contour, edge.idx0, edge.idx1)[:, :, 0], -sub_contour(piece.contour, edge.idx0, edge.idx1)[:, :, 1], c='red')
+        ax.axis('equal')
+    plt.show()
+
+# %% 
+# Calculate
+pairs_of_edges = []
+for piece in pieces:
+    for edge in piece.edges:
+        if edge.sign == 0:
+            continue
+        for other_piece in pieces:
+            if piece == other_piece:
+                continue
+            for other_edge in other_piece.edges:
+                if edge == other_edge:
+                    continue
+                if other_edge.sign == 0:
+                    continue
+                if edge.sign == other_edge.sign:
+                    continue
+                pairs_of_edges.append((edge, other_edge))
+pairs_of_edges.sort(key=lambda pair: np.sum(
+    pair[0].normalized_piece_contour - pair[1].normalized_piece_contour), reverse=True)
+
+for pair in pairs_of_edges[:10]:
+    print(pair[0].absolute_area, pair[1].absolute_area)
+
+# %%
+
+pieces[0].edges[0].normalized_piece_contour
+pieces[0].edges[1].normalized_piece_contour
+
+
+
+
+
+
+# %% 
+    
+pieces.sort(key= lambda piece: len(piece.peak_indices))
+
+piece_by_name = dict([(piece.name, piece) for piece in pieces])
+# Show the pieces having the smallest / highest number of peak indices
+
+
 print("edge sign:", Counter([edge.sign for piece in pieces for edge in piece.edges]))
 print("nb of flats:", Counter([piece.nb_flats for piece in pieces]))
 
 flat_pieces = [piece for piece in pieces if piece.nb_flats > 0]
 
-for piece in flat_pieces:
-    for edge in piece.edges:
-        if edge.sign == 0 and edge.prev.sign != 0:
-            first_flat = edge
-        if edge.sign == 0 and edge.next.sign != 0:
-            last_flat = edge
-    piece.update(
-        first_flat = first_flat,
-        last_flat = last_flat,
-        before_flat = first_flat.prev,
-        after_flat = last_flat.next,
-    )
 
-# Show the pieces having the smallest / highest number of flats
-pieces.sort(key= lambda piece: piece.nb_flats)
 
-sign2color = {-1: "red", 0: "green", 1: "blue"}
+# %% [markdown]
+# # Compute puzzle size
+# 
 
-for piece in pieces[:1] + pieces[-1:]:
-    plt.title(f"{piece.name}, nb of flats={piece.nb_flats}")
-    for edge in piece.edges:
-        plot_contour(sub_contour(piece.contour, edge.idx0, edge.idx1), c=sign2color[edge.sign])
-    plt.show()
+# %% [markdown]
+# ## Calculate straight length
 
+# %%
 # Show the pieces having the min/max edge straight length
 edge_pieces = [(edge, piece) for piece in pieces for edge in piece.edges]
 edge_pieces.sort(key= lambda ep: ep[0].straight_length)
 
-for edge, piece in edge_pieces[:1] + edge_pieces[-1:]:
+for edge, piece in edge_pieces:
     plt.title(f"{piece.name}, edge straight length={edge.straight_length}")
     plot_contour(piece.contour)
     plot_contour(sub_contour(piece.contour, edge.idx0, edge.idx1), c='red')
     plt.show()
 
-# Show some normalized edges
-import random
 
-for piece in random.sample(pieces, 1):
-    for edge in piece.edges[:2]:
-        plt.title(f"{piece.name} normalized edge & center")
-        plot_contour(edge.normalized_piece_contour)
-        plot_point(edge.normalized_piece_center, marker='o', c='red')
-        plt.axhline(0, c='gray', ls=':')
-        plt.axvline(0, c='gray', ls=':')
-        plt.show()
+# %%
+## Show some normalized edges
+#import random
+#
+#for piece in random.sample(pieces, 1):
+#    for edge in piece.edges[:2]:
+#        plt.title(f"{piece.name} normalized edge & center")
+#        plot_contour(edge.normalized_piece_contour)
+#        plot_point(edge.normalized_piece_center, marker='o', c='red')
+#        plt.axhline(0, c='gray', ls=':')
+#        plt.axvline(0, c='gray', ls=':')
+#        plt.show()
+#
 
+# %% [markdown]
+# ## Calculate size
+
+# %%
 """# Compute puzzle size"""
 
-def compute_size(area, perimeter):
-    # perimeter = 2 * (H+W)
-    # area = H*W
-    # H**2 - perimeter/2 * H + area = 0
-    a = 1
-    b = -perimeter/2
-    c = area
-    delta = b**2 - 4*a*c
-    h = int((-b - math.sqrt(delta)) / (2*a))
-    w = int((-b + math.sqrt(delta)) / (2*a))
-    return (min(h, w), max(h, w))
+# def compute_size(area, perimeter):
+#     # perimeter = 2 * (H+W)
+#     # area = H*W
+#     # H**2 - perimeter/2 * H + area = 0
+#     a = 1
+#     b = -perimeter/2
+#     c = area
+#     delta = b**2 - 4*a*c
+#     h = int((-b - math.sqrt(delta)) / (2*a))
+#     w = int((-b + math.sqrt(delta)) / (2*a))
+#     return (min(h, w), max(h, w))
+# 
+# 
+# nb_flats = Counter([piece.nb_flats for piece in pieces])
+# print(nb_flats)
+# assert nb_flats[2] == 4
+# area = len(pieces)
+# perimeter = nb_flats[1] + 2*nb_flats[2]
+# w, h = compute_size(area, perimeter)
+# print(f"Size of puzzle grid: {w} x {h}")
+# assert w * h == area
+# assert 2 * (w + h) == perimeter
+# 
+# solution.update(grid_size = (w, h))
 
-solution = Item()
 
-nb_flats = Counter([piece.nb_flats for piece in pieces])
-assert nb_flats[2] == 4
-area = len(pieces)
-perimeter = nb_flats[1] + 2*nb_flats[2]
-w, h = compute_size(area, perimeter)
-print(f"Size of puzzle grid: {w} x {h}")
-assert w * h == area
-assert 2 * (w + h) == perimeter
+# %% [markdown]
+# # Create edges vector features
 
-solution.update(grid_size = (w, h))
+# %% [markdown]
+# ## Sample edges
 
-"""# Sample edges"""
-
+# %%
+NB_SAMPLES = 120
 NB_SAMPLES = 9
 
 for piece in pieces:
@@ -471,19 +407,79 @@ for piece in pieces:
             arc_length=arc_length,
         )
 
-# Show the pieces having the min/max edge arc length
-edge_pieces = [(edge, piece) for piece in pieces for edge in piece.edges]
-edge_pieces.sort(key= lambda ep: ep[0].arc_length)
+# %%
+## Show the pieces having the min/max edge arc length
+#edge_pieces = [(edge, piece) for piece in pieces for edge in piece.edges]
+#edge_pieces.sort(key= lambda ep: ep[0].arc_length)
+#
+#for edge, piece in edge_pieces[:1] + edge_pieces[-1:]:
+#    plt.title(f"{piece.name}, edge arc length={edge.arc_length}")
+#    plot_contour(piece.contour)
+#    plot_contour(sub_contour(piece.contour, edge.idx0, edge.idx1), c='red')
+#    plot_contour(piece.contour[edge.sample_indices], marker='o', ls='', color='red')
+#    plt.show()
 
-for edge, piece in edge_pieces[:1] + edge_pieces[-1:]:
-    plt.title(f"{piece.name}, edge arc length={edge.arc_length}")
-    plot_contour(piece.contour)
-    plot_contour(sub_contour(piece.contour, edge.idx0, edge.idx1), c='red')
-    plot_contour(piece.contour[edge.sample_indices], marker='o', ls='', color='red')
-    plt.show()
 
-"""# Match border pieces"""
+# %% [markdown]
+# # Match pieces
 
+# %%
+solution = Solution()
+
+
+def match_edges(edge1:Edge, edge2:Edge):
+    if edge1.sign != edge2.sign:
+        return False
+    
+
+def match_edge_points(edge1:Edge, edge2:Edge):
+    pass
+
+def match_pieces(piece1:Piece, piece2:Piece):
+    for edge1 in piece1.edges:
+        for edge2 in piece2.edges:
+            if match_edge_points(edge1, edge2):
+                return True
+    return False
+
+    
+
+# %%
+matches = []
+
+for p1 in pieces:
+    for e1 in p1.edges:
+        if e1.sign == 0:
+            continue
+        for p2 in pieces:
+            if p1 == p2:
+                continue
+
+            for e2 in p2.edges:
+                if e2.sign == 0:
+                    continue
+                if e1.sign != e2.sign:
+                    continue
+                distance = np.linalg.norm(e1.sample_indices - e2.sample_indices)
+                if distance < 100:
+                    matches.append((p1, e1, p2, e2, distance))
+
+
+print(matches)
+for m in matches:
+    print(m[0].name, m[2].name, m[4])
+
+
+
+# %% [markdown]
+# ## Border
+
+# %%
+
+MAX_MATCH_SCORE = 2000
+MAX_MATCH_SCORE = 200
+
+# %%
 points_before_flat = {}  # key=piece, value=sample points
 points_after_flat = {}
 for piece in flat_pieces:
@@ -498,39 +494,50 @@ for piece0 in flat_pieces:
         diff = points1 - points0
         offset = np.mean(diff, axis=0)
         score = np.sum((diff - offset)**2)
-        if score < 2000:
+        if score < MAX_MATCH_SCORE:
             matches.append((score, piece1))
     matches.sort()
     matches_after_flat[piece0] = matches
 
-sum_score = sum([matches[0][0] for matches in matches_after_flat.values()])
-first_piece = piece_by_name['A1']
-paths = [(sum_score, [first_piece])]
-heapq.heapify(paths)
-for _ in range(100):
-    score, ordered_border = heapq.heappop(paths)
-    if len(ordered_border) == len(flat_pieces) + 1:
-        print("Minimum score:", sum_score)
-        print("Score of the border:", score)
-        break
-    last_piece = ordered_border[-1]
-    matches = matches_after_flat[last_piece]
-    for match_score, next_piece in matches:
-        if next_piece not in ordered_border[1:]:
-            heapq.heappush(paths, (score + match_score - matches[0][0], ordered_border.copy() + [next_piece]))
 
-print("Computed border pieces: ", ' '.join([piece.name for piece in ordered_border]))
+# %%
+if len(matches_after_flat) != 0:
+    sum_score = sum([matches[0][0] for matches in matches_after_flat.values()])
+    first_piece = piece_by_name['piece_1']
+    paths = [(sum_score, [first_piece])]
+    heapq.heapify(paths)
+    for _ in range(100):
+        score, ordered_border = heapq.heappop(paths)
+        if len(ordered_border) == len(flat_pieces) + 1:
+            print("Minimum score:", sum_score)
+            print("Score of the border:", score)
+            break
+        last_piece = ordered_border[-1]
+        print(last_piece.name)
+        print(list(map(lambda x: x.name, matches_after_flat.keys())))
+        matches = matches_after_flat[last_piece]
+        print(matches)
+        for match_score, next_piece in matches:
+            if next_piece not in ordered_border[1:]:
+                heapq.heappush(paths, (score + match_score - matches[0][0], ordered_border.copy() + [next_piece]))
 
-assert ordered_border[-1] == ordered_border[0]  # loop on the first piece
-ordered_border = ordered_border[:-1]  # remove the repeated first piece
-h, w = solution.grid_size
-if ordered_border[h-1].nb_flats == 1:
-    h, w = w, h
-    solution.grid_size = w, h
-assert [idx for idx, piece in enumerate(ordered_border) if piece.nb_flats == 2] == [0, h-1, h+w-2, 2*h+w-3]
+    print("Computed border pieces: ", ' '.join([piece.name for piece in ordered_border]))
+else:
+    print("No matches found")
 
-"""# Place the border"""
+# assert ordered_border[-1] == ordered_border[0]  # loop on the first piece
+# ordered_border = ordered_border[:-1]  # remove the repeated first piece
+# h, w = solution.grid_size
+# if ordered_border[h-1].nb_flats == 1:
+#     h, w = w, h
+#     solution.grid_size = w, h
+# assert [idx for idx, piece in enumerate(ordered_border) if piece.nb_flats == 2] == [0, h-1, h+w-2, 2*h+w-3]
 
+
+# %% [markdown]
+# ### Place the border
+
+# %%
 PAD = 30
 
 solution.update(
@@ -579,13 +586,22 @@ for cell in solution.grid.values():
    top_edge = cell.piece.edges[cell.top_edge_idx]
    plot_contour(sub_contour(cell.contour, top_edge.idx0, top_edge.idx1), c='red')
 
-"""# Match inner pieces"""
 
+# %% [markdown]
+# ## Inner pieces
+
+# %%
 piece_edge_points = {}  # key=(piece, edge), value=sample points
 for piece in pieces:
     for edge in piece.edges:
         if edge.sign != 0 and edge.prev.sign != 0 and edge.next.sign != 0:
             piece_edge_points[(piece, edge)] = edge.normalized_piece_contour[edge.sample_indices]
+
+
+# %%
+piece_edge_points
+
+# %%
 
 piece_edge_matches = {}  # key=(piece0, edge0), value=[(score1, piece1, edge1)]
 for (piece0, edge0), points0 in piece_edge_points.items():
@@ -713,3 +729,5 @@ for ij, cell in grid.items():
     plot_contour(cell.contour)
 
 assert len(used_inner_pieces) == len(inner_positions)
+
+
