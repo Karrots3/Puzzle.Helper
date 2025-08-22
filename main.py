@@ -1,284 +1,106 @@
 #!/usr/bin/env python3
-"""
-Main entry point for the Puzzle Solver application.
-
-This script provides a command-line interface for solving puzzles
-by analyzing photos of puzzle pieces.
-"""
-
 import argparse
 import os
 import sys
 import logging
 from pathlib import Path
-
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-from puzzle_solver import PuzzleSolver
+import cv2
+import numpy as np
 
 
-def setup_logging(verbose: bool = False) -> None:
-    """Setup logging configuration."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('puzzle_solver.log')
-        ]
-    )
+def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
+    h, w = img.shape[:2]
+    center_x, center_y = w // 2, h // 2
+
+    perc = radius / 100
+    sz = int(perc * min(h, w))
+    half_sz = sz // 2
+    x1 = max(0, center_x - half_sz)
+    y1 = max(0, center_y - half_sz)
+    x2 = min(w, center_x + half_sz)
+    y2 = min(h, center_y + half_sz)
+
+    img = img[y1:y2, x1:x2]
+
+    return img
 
 
-def validate_input_path(input_path: str) -> bool:
-    """Validate that the input path exists and contains images."""
-    if not os.path.exists(input_path):
-        print(f"Error: Input path '{input_path}' does not exist.")
-        return False
+def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contours = None, only_contours = False) -> None:
+    n_rows = len(list_images) // n_cols
     
-    if not os.path.isdir(input_path):
-        print(f"Error: Input path '{input_path}' is not a directory.")
-        return False
+    # Create a combined image for display
+    max_height = max(img.shape[0] for img in list_images)
+    max_width = max(img.shape[1] for img in list_images)
     
-    # Check for image files
-    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-    image_files = [
-        f for f in os.listdir(input_path)
-        if any(f.lower().endswith(ext) for ext in image_extensions)
-    ]
+    # Create a grid layout
+    combined_img = np.zeros((max_height * n_rows, max_width * n_cols, 3), dtype=np.uint8)
     
-    if not image_files:
-        print(f"Error: No image files found in '{input_path}'.")
-        print(f"Supported formats: {', '.join(image_extensions)}")
-        return False
+    for i, img in enumerate(list_images):
+        row = i // n_cols
+        col = i % n_cols
+        
+        if only_contours:
+            # Create a black background for contours only
+            display_img = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+        else:
+            # Convert grayscale to BGR if needed
+            if len(img.shape) == 2:
+                display_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                display_img = img.copy()
+        
+        # Draw contours if provided
+        if contours and i < len(contours):
+            cs = contours[i]
+            print(f"Imagine {i} has got {len(cs)} contours")
+            # Draw contours on the display image
+            cv2.drawContours(display_img, cs, -1, (0, 255, 0), 2)
+        
+        # Place the image in the grid
+        y_start = row * max_height
+        y_end = y_start + img.shape[0]
+        x_start = col * max_width
+        x_end = x_start + img.shape[1]
+        
+        combined_img[y_start:y_end, x_start:x_end] = display_img
     
-    print(f"Found {len(image_files)} image files in '{input_path}'")
-    return True
-
-
-def create_output_directory(output_path: str) -> bool:
-    """Create output directory if it doesn't exist."""
-    try:
-        os.makedirs(output_path, exist_ok=True)
-        return True
-    except Exception as e:
-        print(f"Error creating output directory '{output_path}': {e}")
-        return False
+    # Save the combined image
+    cv2.imwrite(f"data/results/00_subplots{"_cont" if only_contours else ""}.png", combined_img)
+    
+    # Display the combined image
+    cv2.imshow("Subplots", combined_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def main():
-    """Main function for the puzzle solver application."""
-    parser = argparse.ArgumentParser(
-        description='Puzzle Solver - Analyze photos of puzzle pieces and find correct arrangements',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py --input data/sample_pieces --output data/results
-  python main.py --input puzzle_photos/ --output solution/ --verbose
-  python main.py --input pieces/ --output results/ --save-solution --visualize
-  python main.py --input data/ --detect-only --pieces-output-dir data/results/pieces
-  python main.py --input data/ --save-detected-pieces --pieces-output-dir data/results/pieces
-        """
-    )
-    
-    parser.add_argument(
-        '--input', '-i',
-        required=True,
-        help='Path to directory containing puzzle piece images'
-    )
-    
-    parser.add_argument(
-        '--output', '-o',
-        default='data/results',
-        help='Path to output directory for results (default: data/results)'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose logging'
-    )
-    
-    parser.add_argument(
-        '--save-solution',
-        action='store_true',
-        default=True,
-        help='Save solution data to JSON file'
-    )
-    
-    parser.add_argument(
-        '--visualize',
-        action='store_true',
-        default=True,
-        help='Generate and save visualization plots'
-    )
-    
-    parser.add_argument(
-        '--save-image',
-        action='store_true',
-        default=True,
-        help='Save solution as an image file'
-    )
-    
-    parser.add_argument(
-        '--animation',
-        action='store_true',
-        default=True,
-        help='Create animation of puzzle assembly process'
-    )
-    
-    parser.add_argument(
-        '--save-detected-pieces',
-        action='store_true',
-        default=True,
-        help='Save detected puzzle pieces as individual image files'
-    )
-    
-    parser.add_argument(
-        '--pieces-output-dir',
-        default='data/results/detected_pieces',
-        help='Directory to save detected puzzle pieces (default: data/results/detected_pieces)'
-    )
-    
-    parser.add_argument(
-        '--detect-only',
-        action='store_true',
-        default=True,
-        help='Only detect and save puzzle pieces without solving the puzzle'
-    )
-    
-    parser.add_argument(
-        '--config',
-        help='Path to configuration file (JSON format)'
-    )
-    
-    args = parser.parse_args()
-    
-    # Setup logging
-    setup_logging(args.verbose)
-    logger = logging.getLogger(__name__)
-    
-    logger.info("Starting Puzzle Solver application")
-    
-    # Validate input path
-    if not validate_input_path(args.input):
-        sys.exit(1)
-    
-    # Create output directory
-    if not create_output_directory(args.output):
-        sys.exit(1)
-    
-    try:
-        # Load configuration if provided
-        config = None
-        if args.config:
-            import json
-            with open(args.config, 'r') as f:
-                config = json.load(f)
-            logger.info(f"Loaded configuration from {args.config}")
+    list_files = [Path(f) for f in Path("data").glob("*.JPG")]
+
+    list_photos = []
+    list_contours = []
+    for file in list_files:
+        img = cv2.imread(str(file))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = trim_image(img,60)
+        contour, _= cv2.findContours(img,cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        list_contours.append(contour)
+        list_photos.append(img)
+
+        _,th3 = cv2.threshold(img,110,255,cv2.THRESH_BINARY)# + cv2.THRESH_OTSU)
+        contour, _= cv2.findContours(th3,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        list_contours.append(contour)
+        list_photos.append(th3)
         
-        # Initialize puzzle solver
-        logger.info("Initializing puzzle solver")
-        solver = PuzzleSolver(config=config)
-        
-        # Handle detect-only mode
-        if args.detect_only:
-            logger.info("Running in detect-only mode")
-            result = solver.detect_and_save_pieces(
-                args.input, 
-                args.pieces_output_dir, 
-                prefix="detected_piece"
-            )
-            
-            metadata = result.get('metadata', {})
-            logger.info("Piece detection completed!")
-            logger.info(f"Input pieces processed: {metadata.get('total_input_pieces', 0)}")
-            logger.info(f"Pieces detected: {metadata.get('total_detected_pieces', 0)}")
-            logger.info(f"Pieces saved: {metadata.get('total_saved_pieces', 0)}")
-            logger.info(f"Saved to: {args.pieces_output_dir}")
-            
-            # Save detection results
-            if args.save_solution:
-                detection_path = os.path.join(args.output, 'detection_results.json')
-                import json
-                with open(detection_path, 'w') as f:
-                    json.dump(result, f, indent=2)
-                logger.info(f"Detection results saved to: {detection_path}")
-            
-            return
-        
-        # Load puzzle pieces
-        logger.info("Loading puzzle pieces")
-        pieces = solver.load_pieces(args.input)
-        
-        if not pieces:
-            logger.error("No valid puzzle pieces found")
-            sys.exit(1)
-        
-        logger.info(f"Successfully loaded {len(pieces)} puzzle pieces")
-        
-        # Solve the puzzle
-        logger.info("Solving puzzle")
-        solution = solver.solve(
-            pieces, 
-            save_detected_pieces=args.save_detected_pieces,
-            pieces_output_dir=args.pieces_output_dir if args.save_detected_pieces else None
-        )
-        
-        # Display solution summary
-        metadata = solution.get('metadata', {})
-        logger.info("Puzzle solving completed!")
-        logger.info(f"Total pieces processed: {metadata.get('total_pieces', 0)}")
-        logger.info(f"Total matches found: {metadata.get('total_matches', 0)}")
-        logger.info(f"Grid size: {metadata.get('grid_size', (0, 0))}")
-        
-        # Display information about saved pieces
-        if args.save_detected_pieces:
-            pieces_saved = metadata.get('pieces_saved', 0)
-            logger.info(f"Detected pieces saved: {pieces_saved}")
-            logger.info(f"Pieces saved to: {args.pieces_output_dir}")
-        
-        # Save solution data
-        if args.save_solution:
-            solution_path = os.path.join(args.output, 'solution.json')
-            solver.save_solution(solution, solution_path)
-            logger.info(f"Solution saved to: {solution_path}")
-        
-        # Generate visualizations
-        if args.visualize:
-            viz_path = os.path.join(args.output, 'solution_visualization.png')
-            solver.visualize_solution(solution, viz_path)
-            logger.info(f"Visualization saved to: {viz_path}")
-        
-        # Save solution image
-        if args.save_image:
-            img_path = os.path.join(args.output, 'solution_image.png')
-            solver.visualizer.save_solution_image(solution, img_path)
-            logger.info(f"Solution image saved to: {img_path}")
-        
-        # Create animation
-        if args.animation:
-            anim_path = os.path.join(args.output, 'solution_animation.gif')
-            solver.visualizer.create_solution_animation(solution, anim_path)
-            logger.info(f"Animation saved to: {anim_path}")
-        
-        # Show visualization if requested
-        if args.visualize and not args.save_solution:
-            solver.visualize_solution(solution)
-        
-        logger.info("Puzzle solving process completed successfully!")
-        
-    except KeyboardInterrupt:
-        logger.info("Process interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"An error occurred: {e}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
+        _,th3 = cv2.threshold(img,110,255,cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contour, _= cv2.findContours(th3,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        list_contours.append(contour)
+        list_photos.append(th3)
 
 
-if __name__ == '__main__':
+
+    plot_subplots_images(list_photos,n_cols=3, contours=list_contours, only_contours=True)
+    plot_subplots_images(list_photos,n_cols=3, contours=list_contours)
+
+
+if __name__ == "__main__":
     main()
