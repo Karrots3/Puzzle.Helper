@@ -6,7 +6,16 @@ import logging
 from pathlib import Path
 import cv2
 import numpy as np
+from scipy.signal import find_peaks
+import itertools
+import math
 
+class LoopingList(list):
+    def __getitem__(self, i):
+        if isinstance(i, int):
+            return super().__getitem__(i % len(self))
+        else:
+            return super().__getitem__(i)
 
 def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
     h, w = img.shape[:2]
@@ -24,8 +33,25 @@ def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
 
     return img
 
+def color_string_to_tuple(color_string: str) -> tuple[int, int, int]:
+    match color_string:
+        case "black":
+            return (0, 0, 0)
+        case "white":
+            return (255, 255, 255)
+        case "red":
+            return (0, 0, 255)
+        case "green":
+            return (0, 255, 0)
+        case "blue":
+            return (255, 0, 0)
+        case "yellow":
+            return (0, 255, 255)
+        case _:
+            raise ValueError(f"Invalid color string: {color_string}")
 
-def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contours = None, only_contours = False) -> None:
+
+def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.ndarray], list_peaks: list[np.ndarray], list_edges: list[list[np.ndarray]], n_cols: int, only_contour = False) -> None:
     n_rows = len(list_images) // n_cols
     
     # Create a combined image for display
@@ -35,12 +61,13 @@ def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contour
     # Create a grid layout
     combined_img = np.zeros((max_height * n_rows, max_width * n_cols, 3), dtype=np.uint8)
     
-    for i, img in enumerate(list_images):
+    for i, (img, contour, peaks, edges) in enumerate(zip(list_images, list_contours, list_peaks, list_edges)):
         row = i // n_cols
         col = i % n_cols
         
-        if only_contours:
-            # Create a black background for contours only
+        # Background imagine
+        if only_contour:
+            # Create a black background for contour only
             display_img = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
         else:
             # Convert grayscale to BGR if needed
@@ -49,12 +76,40 @@ def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contour
             else:
                 display_img = img.copy()
         
-        # Draw contours if provided
-        if contours and i < len(contours):
-            cs = contours[i]
-            print(f"Imagine {i} has got {len(cs)} contours")
-            # Draw contours on the display image
-            cv2.drawContours(display_img, cs, -1, (0, 255, 0), 2)
+        # Draw contour
+        COLOR_CONTOUR = color_string_to_tuple("green")
+        THICKNESS_CONTOUR = 3
+        if contour:
+            cv2.drawContours(
+                display_img,
+                contour,
+                -1,
+                COLOR_CONTOUR,
+                THICKNESS_CONTOUR
+            )
+
+        # Draw peaks
+        COLOR_PEAKS = color_string_to_tuple("red")
+        RADIUS_PEAKS = 5
+        THICKNESS_PEAKS = 8
+        if len(peaks) > 0:
+            for peak in peaks:
+                peak_coords = (int(peak[0]), int(peak[1]))
+                cv2.circle(display_img,center=peak_coords, radius=RADIUS_PEAKS, color=COLOR_PEAKS, thickness=THICKNESS_PEAKS)
+
+        # Draw edge lines
+        COLOR_LINES = color_string_to_tuple("blue")
+        THICKNESS_LINES = 8
+        COLOR_EDGES = color_string_to_tuple("yellow")
+        if len(edges) > 0:
+            print("len edges", len(edges))
+            for edge in edges:
+                if len(edge) == 0:
+                    continue
+                print("len edge", len(edge))
+                cv2.line(display_img, (edge[0][0], edge[0][1]), (edge[-1][0], edge[-1][1]), COLOR_LINES, THICKNESS_LINES)
+                cv2.drawContours(display_img, [edge], -1, COLOR_EDGES, THICKNESS_LINES)
+                
         
         # Place the image in the grid
         y_start = row * max_height
@@ -65,41 +120,141 @@ def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contour
         combined_img[y_start:y_end, x_start:x_end] = display_img
     
     # Save the combined image
-    cv2.imwrite(f"data/results/00_subplots{"_cont" if only_contours else ""}.png", combined_img)
+    cv2.imwrite(f"data/results/00_subplots{"_cont" if only_contour else ""}.png", combined_img)
     
     # Display the combined image
-    cv2.imshow("Subplots", combined_img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow("Subplots", combined_img)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
 
 
 def main():
+    out_path = Path("data/results")
+    out_path.mkdir(parents=True, exist_ok=True)
     list_files = [Path(f) for f in Path("data").glob("*.JPG")]
-
+    
     list_photos = []
     list_contours = []
-    for file in list_files:
+    list_peaks = []
+    list_edges = []
+    for ti, file in enumerate(list_files):
         img = cv2.imread(str(file))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = trim_image(img,60)
-        contour, _= cv2.findContours(img,cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        list_contours.append(contour)
+        #list_photos.append(img)
+        #list_contours.append([])
+        #list_peaks.append([])
+
+        #contour, _= cv2.findContours(img,cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        #contour = [c for c in contour if 100 < cv2.contourArea(c) < 1e6]
+        #list_contours.append(contour)
+        #list_photos.append(img)
+
+        # # OTSU
+        # _,th3 = cv2.threshold(img,110,255,cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # contour, _= cv2.findContours(th3,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        # contour = [c for c in contour if 100 < cv2.contourArea(c) < 1e6]
+        # list_contours.append(contour)
+        # list_photos.append(th3)
+
+        _,img= cv2.threshold(img,110,255,cv2.THRESH_BINARY)# + cv2.THRESH_OTSU)
+        contour, _= cv2.findContours(img,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        contour = [c for c in contour if 100 < cv2.contourArea(c) < 1e6]
+        assert len(contour) == 1
+        contour=contour
         list_photos.append(img)
-
-        _,th3 = cv2.threshold(img,110,255,cv2.THRESH_BINARY)# + cv2.THRESH_OTSU)
-        contour, _= cv2.findContours(th3,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
         list_contours.append(contour)
-        list_photos.append(th3)
+        list_peaks.append([])
+        list_edges.append([])
+
+        #cent_contour=contour[0]
+        #cent_contour[:,:,0] -= np.mean(cent_contour[:,:,0]).astype(int)
+        #cent_contour[:,:,1] -= np.mean(cent_contour[:,:,1]).astype(int)
+
+        #len_contour = cent_contour.shape[0]
+        #min_dist_peaks = len_contour // 5
+
+        #distances_from_center = np.sum(cent_contour**2,axis=2)[:,0]
+        #peaks_idx = list(find_peaks(distances_from_center,distance=min_dist_peaks)[0].astype(int))
+        #peaks = contour[0][peaks_idx][:,0,:]
+        #list_peaks.append(peaks)
+
+        (cx, cy), cr = cv2.minEnclosingCircle(contour[0])
+        centered_contour = contour[0] - np.array([cx, cy])
+
+        # ensure peaks are not at start or end of the distances array
+        distances = np.sum(centered_contour**2, axis=2)[:, 0]
+        distance_offset = np.argmin(distances)
+        shifted_distances = np.concatenate([distances[distance_offset:], distances[:distance_offset]])
+
+        # find peak distances
+        PROMINENCE = 1500
+        prominence = PROMINENCE
+        counter = 0
+        while True and counter < 10:
+            counter += 1
+            peak_indices = [(distance_idx + distance_offset) % len(distances) for distance_idx in find_peaks(shifted_distances, prominence=prominence)[0]]
+            print(f"Prominence: {prominence}, number of peaks: {len(peak_indices)}")
+            if len(peak_indices) < 8:
+                prominence = prominence *0.9
+            elif len(peak_indices) > 20:
+                prominence = prominence * 1.1
+            else:
+                break
+
+        peak_indices.sort()
+        list_photos.append(img)
+        list_contours.append(contour)
+        list_peaks.append(contour[0][peak_indices,0,:])
+        list_edges.append([])
+
+        # TODO plot the peaks and fix prominance to reduce number of peaks
+        print(len(peak_indices))
+
+        # select the one that better approximate a rectangle
+        def compute_rectangle_error(indices):
+            # get coordinates of corners
+            corners = LoopingList(np.take(contour[0], sorted(list(indices)), axis=0)[:, 0, :])
+            # compute the side lengths and diagonal lengths
+            lengths = [math.sqrt(np.sum((corners[i0] - corners[i1])**2)) for i0, i1 in [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)]]
+            def f_error(a, b):
+                return abs(b - a) / (a + b)
+            return sum([f_error(lengths[i], lengths[j]) for i, j in [(0, 2), (1, 3), (4, 5), (0, 1)]])
+
+        # form a good rectangle with peak indices
+        rectangles = []  # list of (score, [indices])
+        for indices in itertools.combinations(peak_indices, 4):
+            error = compute_rectangle_error(indices)
+            rectangles.append((error, indices))
+
+        error, indices = sorted(rectangles)[0]
+        assert len(indices) == 4
+
+        list_photos.append(img)
+        list_contours.append(contour)
+        list_peaks.append(contour[0][indices,0,:])
+        list_edges.append([])
+
+        # # Extract edges
+        edges = [
+            contour[0][range(indices[0], indices[1]),0,:],
+            contour[0][range(indices[1], indices[2]),0,:],
+            contour[0][range(indices[2], indices[3]),0,:],
+            contour[0][list(range(indices[3], len(contour[0]))) + list(range(0, indices[0])),0,:],
+        ]
         
-        _,th3 = cv2.threshold(img,110,255,cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        contour, _= cv2.findContours(th3,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        list_photos.append(img)
         list_contours.append(contour)
-        list_photos.append(th3)
+        list_peaks.append(contour[0][indices,0,:])
+        list_edges.append(edges)
+
+        
 
 
 
-    plot_subplots_images(list_photos,n_cols=3, contours=list_contours, only_contours=True)
-    plot_subplots_images(list_photos,n_cols=3, contours=list_contours)
+
+    plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=True)
+    plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=False)
 
 
 if __name__ == "__main__":
