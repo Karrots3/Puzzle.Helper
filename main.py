@@ -159,11 +159,9 @@ def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.n
 
         # Draw edge lines
         if len(edges) > 0:
-            #print("len edges", len(edges))
             for edge in edges:
                 if len(edge) == 0:
                     continue
-                #print("len edge", len(edge))
                 cv2.line(display_img, (edge[0][0], edge[0][1]), (edge[-1][0], edge[-1][1]), COLOR_LINES, THICKNESS_LINES)
                 cv2.drawContours(display_img, [edge], -1, COLOR_EDGES, THICKNESS_LINES)
                 
@@ -241,11 +239,9 @@ def plot_images(list_images: list[Image], n_cols: int, only_contour: bool = Fals
 
         # Draw edge lines
         if len(edges) > 0:
-            #print("len edges", len(edges))
             for edge in edges:
                 if len(edge) == 0:
                     continue
-                #print("len edge", len(edge))
                 cv2.line(display_img, (edge[0][0], edge[0][1]), (edge[-1][0], edge[-1][1]), COLOR_LINES, THICKNESS_LINES)
                 cv2.drawContours(display_img, [edge], -1, COLOR_EDGES, THICKNESS_LINES)
                 
@@ -351,7 +347,6 @@ def preprocess_images():
     
 
         # TODO plot the peaks and fix prominance to reduce number of peaks
-        #print(len(peak_indices))
 
         # select the one that better approximate a rectangle
         def compute_rectangle_error(indices):
@@ -492,6 +487,7 @@ def preprocess_images():
 def plot_scores(scores: np.ndarray):
     scores[scores == 0] = np.nan
     scores = np.log10(scores)
+    scores[scores > 1.8] = np.nan
     
     plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
     plt.title("Scores")
@@ -508,81 +504,152 @@ def plot_scores(scores: np.ndarray):
     plt.close()
 
 
-def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int, float]:#
-    print(f"Scoring match between piece {i} and piece {j}")
+
+
+def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int, float]:
+    """
+    Improved edge matching function for puzzle pieces.
+    Returns the best matching score between any edge of piece0 and piece1.
+    """
+    
     if i >= j:
-        print(f"Piece {i} is greater than piece {j} or equal to it")
-        return (i,j,0)
+        return (i, j, 0)
 
-    scores_match = []
-    for e0 in piece0.edges_norm:
-        if e0.sign == 0:
-            print(f"Piece {i} has a flat edge")
+    best_score = float('inf')
+    
+    for e0_idx, e0 in enumerate(piece0.edges_norm):
+        if e0.sign == 0:  # Skip flat edges
             continue
-        e0.contour = e0.contour[10:-10]
-
-        for e1 in piece1.edges_norm:
-            if e1.sign == 0:
-                print(f"Piece {j} has a flat edge")
-                continue
-            if e0.sign == e1.sign:
-                print(f"Piece {i} and piece {j} have the same sign")
-                continue
-
-            e1.contour = e1.contour[10:-10]
             
-            for inv in [1, -1]:
-                # FIX EDGES LENGTHS
-                # IF LENGTHS ARE DIFFERENT:
-                # 1. remove the points from the longer edge until they are the same length
-                diff_length = len(e0.contour) - len(e1.contour)
-                if diff_length > 0:
-                    e0.contour = e0.contour[diff_length//2:-diff_length//2,:,:]
-                    # 2. make center coordinates of e0 become the same as e1
-                    p0 = e0.contour[0,0,:]
-                    p1 = e0.contour[-1,0,:]
-                    dx, dy = p1 - p0
-                    angle_degrees=0
-                    center = p0 
-                    matrix = cv2.getRotationMatrix2D(center.astype(np.float32), angle_degrees, 1)
-                    translate = (0, 0) - center
-                    transform = (matrix, translate)
-                    matrix, translate = transform
-                    e0.contour = cv2.transform(e0.contour, matrix) + translate
-                    
-                elif diff_length < 0:
-                    diff_length = -diff_length
-                    e1.contour = e1.contour[diff_length//2:-diff_length//2,:,:]
-                    # 2. make center coordinates of e1 become the same as e0
-                    p0 = e1.contour[0,0,:]
-                    p1 = e1.contour[0,0,:]
-                    dx, dy = p1 - p0
-                    angle_degrees=0
-                    center = p0 
-                    matrix = cv2.getRotationMatrix2D(center.astype(np.float32), angle_degrees, 1)
-                    translate = (0, 0) - center
-                    transform = (matrix, translate)
-                    matrix, translate = transform
-                    e1.contour = cv2.transform(e1.contour, matrix) + translate
+        for e1_idx, e1 in enumerate(piece1.edges_norm):
+            if e1.sign == 0:  # Skip flat edges
+                continue
+            #if e0.sign == e1.sign:  # Same sign edges don't match
+            #    continue
+            
+            # Make copies to avoid modifying original data
+            contour0 = e0.contour.copy()[:, 0, :]  # Shape: (N, 2)
+            contour1 = e1.contour.copy()[:, 0, :]  # Shape: (M, 2)
+
+            
+            # Remove edge points to avoid boundary artifacts
+            trim_points = min(10, len(contour0)//4, len(contour1)//4)
+            if len(contour0) > 2 * trim_points:
+                contour0 = contour0[trim_points:-trim_points]
+            if len(contour1) > 2 * trim_points:
+                contour1 = contour1[trim_points:-trim_points]
+            
+            # remove first and last 20 points
+            contour0 = contour0[30:-30]
+            contour1 = contour1[30:-30]
+
+            # Try both orientations of the second contour
+            for flip in [False, True]:
+                c1 = contour1[::-1] if flip else contour1
                 
-                # compute the score
-                diff = e0.contour - e1.contour[::inv]
-                offset = np.mean(diff, axis=0)
-                score = np.sum((diff - offset)**2)
-        
-                scores_match.append(score)
-
-                if i==4 and j==5:
-                    plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
-                    plt.title(f"Edges {i} {j}, score: {score:.3e}")
-                    plt.plot(e0.contour[:,0,0], e0.contour[:,0,1], label="e0")
-                    plt.plot(e1.contour[:,0,0], e1.contour[:,0,1], label="e1")
+                # Normalize both contours to same length using interpolation
+                target_length = min(len(contour0), len(c1), 100)  # Cap at 100 points
+                
+                # Resample contours to same length
+                def resample_contour(contour, target_len):
+                    if len(contour) <= 1:
+                        return contour
+                    
+                    # Create parameter array for original contour
+                    t_orig = np.linspace(0, 1, len(contour))
+                    t_new = np.linspace(0, 1, target_len)
+                    
+                    # Interpolate x and y coordinates separately
+                    x_new = np.interp(t_new, t_orig, contour[:, 0])
+                    y_new = np.interp(t_new, t_orig, contour[:, 1])
+                    
+                    return np.column_stack([x_new, y_new])
+                
+                c0_resampled = resample_contour(contour0, target_length)
+                c1_resampled = resample_contour(c1, target_length)
+                
+                if len(c0_resampled) < 2 or len(c1_resampled) < 2:
+                    continue
+                
+                # Normalize position: align start points
+                c0_normalized = c0_resampled - c0_resampled[0]
+                c1_normalized = c1_resampled - c1_resampled[0]
+                
+                # Normalize scale: make end-to-end distance the same
+                c0_length = np.linalg.norm(c0_normalized[-1] - c0_normalized[0])
+                c1_length = np.linalg.norm(c1_normalized[-1] - c1_normalized[0])
+                
+                if c0_length > 0 and c1_length > 0:
+                    c1_normalized = c1_normalized * (c0_length / c1_length)
+                
+                # Align end points by rotating c1
+                if np.linalg.norm(c0_normalized[-1]) > 0:
+                    # Calculate rotation angle to align end points
+                    v0 = c0_normalized[-1]
+                    v1 = c1_normalized[-1]
+                    
+                    angle0 = np.arctan2(v0[1], v0[0])
+                    angle1 = np.arctan2(v1[1], v1[0])
+                    rotation_angle = angle0 - angle1
+                    
+                    # Apply rotation to c1
+                    cos_a, sin_a = np.cos(rotation_angle), np.sin(rotation_angle)
+                    rotation_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+                    c1_normalized = np.dot(c1_normalized, rotation_matrix.T)
+                
+                # For male edges (positive sign), flip vertically to match with female
+                if e0.sign == 1:
+                    c0_normalized[:, 1] = -c0_normalized[:, 1]
+                if e1.sign == 1:
+                    c1_normalized[:, 1] = -c1_normalized[:, 1]
+                
+                # Calculate the matching score
+                # Use perpendicular distance as the primary metric
+                diff = c0_normalized - c1_normalized
+                
+                # Weight the middle points more heavily (they're more characteristic)
+                weights = np.exp(-((np.arange(len(diff)) - len(diff)/2) / (len(diff)/4))**2)
+                weights = weights / np.sum(weights)
+                
+                # Calculate weighted RMS distance
+                distances = np.linalg.norm(diff, axis=1)
+                score = np.sqrt(np.sum(weights * distances**2))
+                
+                # Penalize large endpoint misalignment
+                endpoint_penalty = np.linalg.norm(c0_normalized[-1] - c1_normalized[-1]) * 2
+                score += endpoint_penalty
+                
+                best_score = min(best_score, score)
+                
+                # Debug visualization for specific pair
+                if ((i == 4 and j == 5) or (i == 5 and j == 6)) and score == best_score:
+                    plt.figure(figsize=(12, 8))
+                    plt.subplot(1, 2, 1)
+                    plt.plot(c0_normalized[:, 0], c0_normalized[:, 1], 'b-', label=f'Piece {i} edge {e0_idx}', linewidth=2)
+                    plt.plot(c1_normalized[:, 0], c1_normalized[:, 1], 'r-', label=f'Piece {j} edge {e1_idx}', linewidth=2)
+                    plt.scatter(c0_normalized[0, 0], c0_normalized[0, 1], color='blue', s=100, marker='o', label='Start')
+                    plt.scatter(c0_normalized[-1, 0], c0_normalized[-1, 1], color='blue', s=100, marker='s', label='End')
+                    plt.scatter(c1_normalized[0, 0], c1_normalized[0, 1], color='red', s=100, marker='o')
+                    plt.scatter(c1_normalized[-1, 0], c1_normalized[-1, 1], color='red', s=100, marker='s')
+                    plt.axis('equal')
+                    plt.grid(True, alpha=0.3)
                     plt.legend()
-                    plt.show()
+                    plt.title(f'Normalized Edges - Score: {score:.2f}')
+                    
+                    plt.subplot(1, 2, 2)
+                    plt.plot(distances, 'g-', linewidth=2, label='Point distances')
+                    plt.plot(weights * np.max(distances), 'k--', alpha=0.7, label='Weights (scaled)')
+                    plt.xlabel('Point index')
+                    plt.ylabel('Distance')
+                    plt.legend()
+                    plt.title('Distance Profile')
+                    plt.grid(True, alpha=0.3)
+                    
+                    plt.tight_layout()
+                    plt.savefig(f"data/results/debug_match_{i}_{j}.png", dpi=200)
                     plt.close()
-    print(scores_match)
-
-    return (i,j,np.min(scores_match))
+    
+    return (i, j, best_score if best_score != float('inf') else 1e6)
 
 
 def score_pieces(list_Images: list[Image], multiprocessing: bool = False) -> np.ndarray:
@@ -610,5 +677,6 @@ if __name__ == "__main__":
     list_Images = preprocess_images()
 
     scores = score_pieces(list_Images)    
-    print(scores)
     plot_scores(scores)
+
+
