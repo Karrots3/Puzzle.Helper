@@ -152,8 +152,8 @@ def plot_edges(list_edges: list[list[np.ndarray]]) -> None:
     max_x = max(max(edge[:,0]) for edges in list_edges for edge in edges)
     max_y = max(max(edge[:,1]) for edges in list_edges for edge in edges)
 
-    height = max_y - min_y + 100  # Add padding
-    width = max_x - min_x + 100   # Add padding
+    height = int(max_y - min_y + 100)  # Add padding
+    width = int(max_x - min_x + 100)   # Add padding
     combined_img = np.zeros((n_rows * height, n_cols * width, 3), dtype=np.uint8)
 
     for i, edges in enumerate(list_edges):
@@ -300,16 +300,38 @@ def main():
         list_edges.append([])
         list_edges_norm.append([])
 
-        # # Center edges
+        # # Center and rotate edges to align horizontally
         edges_norm = []
         for e in edges:
+            # Center the edge
             M = cv2.moments(e)
             cx = int(M["m10"] / M["m00"])
             cy = int(M["m01"] / M["m00"])
-            e[:,0] -= cx
-            e[:,1] -= cy
-            e_norm = e - np.array([cx, cy])
-            edges_norm.append(e_norm)
+            e_centered = e - np.array([cx, cy])
+            
+            # Find the extreme points (leftmost and rightmost)
+            x_coords = e_centered[:, 0]
+            leftmost_idx = np.argmin(x_coords)
+            rightmost_idx = np.argmax(x_coords)
+            
+            # Calculate the angle to rotate so extreme points are horizontal
+            leftmost_point = e_centered[leftmost_idx]
+            rightmost_point = e_centered[rightmost_idx]
+            
+            # Calculate angle between the line connecting extreme points and horizontal
+            dx = rightmost_point[0] - leftmost_point[0]
+            dy = rightmost_point[1] - leftmost_point[1]
+            angle = math.atan2(dy, dx)
+            
+            # Create rotation matrix
+            cos_angle = math.cos(-angle)  # Negative to rotate clockwise
+            sin_angle = math.sin(-angle)
+            rotation_matrix = np.array([[cos_angle, -sin_angle], 
+                                       [sin_angle, cos_angle]])
+            
+            # Apply rotation to all points
+            e_rotated = np.dot(e_centered, rotation_matrix.T)
+            edges_norm.append(e_rotated)
 
         # # Rotate edges
         list_photos.append(img)
