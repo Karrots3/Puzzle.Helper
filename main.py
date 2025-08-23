@@ -505,152 +505,231 @@ def plot_scores(scores: np.ndarray):
 
 
 
+def compute_curvature(contour):
+    """Compute curvature at each point of the contour."""
+    if len(contour) < 3:
+        return np.zeros(len(contour))
+    
+    # Smooth the contour slightly to reduce noise
+    from scipy import ndimage
+    x = ndimage.gaussian_filter1d(contour[:, 0], sigma=1.0)
+    y = ndimage.gaussian_filter1d(contour[:, 1], sigma=1.0)
+    
+    # Compute first and second derivatives
+    dx = np.gradient(x)
+    dy = np.gradient(y)
+    ddx = np.gradient(dx)
+    ddy = np.gradient(dy)
+    
+    # Curvature formula: (x'y'' - y'x'') / (x'^2 + y'^2)^(3/2)
+    numerator = dx * ddy - dy * ddx
+    denominator = (dx**2 + dy**2)**1.5
+    
+    # Avoid division by zero
+    denominator[denominator < 1e-6] = 1e-6
+    curvature = numerator / denominator
+    
+    return curvature
+
+def normalize_edge_for_matching(edge_contour, target_length=50):
+    """Normalize an edge contour for comparison."""
+    if len(edge_contour) < 2:
+        return None
+    
+    contour = edge_contour[:, 0, :] if len(edge_contour.shape) == 3 else edge_contour
+    
+    # Remove a few points from ends to avoid corner artifacts
+    trim = min(5, len(contour) // 10)
+    if len(contour) > 2 * trim:
+        contour = contour[trim:-trim]
+    
+    # Resample to fixed number of points using arc-length parameterization
+    distances = np.cumsum(np.sqrt(np.sum(np.diff(contour, axis=0)**2, axis=1)))
+    distances = np.concatenate([[0], distances])
+    
+    # Normalize arc length to [0, 1]
+    if distances[-1] > 0:
+        distances = distances / distances[-1]
+    
+    # Resample at uniform intervals
+    uniform_params = np.linspace(0, 1, target_length)
+    x_resampled = np.interp(uniform_params, distances, contour[:, 0])
+    y_resampled = np.interp(uniform_params, distances, contour[:, 1])
+    
+    resampled = np.column_stack([x_resampled, y_resampled])
+    
+    # Center the contour (align first point to origin)
+    resampled = resampled - resampled[0]
+    
+    # Normalize scale (make end-to-end distance = 1)
+    end_to_end = np.linalg.norm(resampled[-1] - resampled[0])
+    if end_to_end > 1e-6:
+        resampled = resampled / end_to_end
+    
+    # Align end point to x-axis
+    if np.linalg.norm(resampled[-1]) > 1e-6:
+        angle = np.arctan2(resampled[-1][1], resampled[-1][0])
+        cos_a, sin_a = np.cos(-angle), np.sin(-angle)
+        rotation = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        resampled = np.dot(resampled, rotation.T)
+    
+    return resampled
+
+def score_edge_match(contour1, contour2, sign1, sign2):
+    """Score how well two edge contours match (lower is better)."""
+    
+    # Only opposite signs can match
+    if sign1 == sign2 or sign1 == 0 or sign2 == 0:
+        return float('inf')
+    
+    # Normalize both contours
+    contour1 = contour1[30:-30]
+    contour2 = contour2[30:-30]
+    norm1 = normalize_edge_for_matching(contour1)
+    norm2 = normalize_edge_for_matching(contour2)
+    
+    if norm1 is None or norm2 is None:
+        return float('inf')
+    
+    best_score = float('inf')
+    
+    # Try all four orientations
+    for flip1 in [False, True]:
+        for flip2 in [False, True]:
+            c1 = norm1[::-1] if flip1 else norm1
+            c2 = norm2[::-1] if flip2 else norm2
+            
+            # For complementarity: if one is male (+1), flip it vertically
+            if sign1 == 1:  # c1 is male
+                c1_test = c1.copy()
+                c1_test[:, 1] = -c1_test[:, 1]
+            else:  # c1 is female, so c2 must be male
+                c1_test = c1.copy()
+                c2 = c2.copy()
+                c2[:, 1] = -c2[:, 1]
+            
+            # Compute curvatures
+            curv1 = compute_curvature(c1_test)
+            curv2 = compute_curvature(c2)
+            
+            # Score 1: Direct point-to-point distance after alignment
+            diff = c1_test - c2
+            geometric_score = np.mean(np.linalg.norm(diff, axis=1))
+            
+            # Score 2: Curvature complementarity (should be negatively correlated)
+            if len(curv1) == len(curv2) and len(curv1) > 1:
+                # Negative correlation indicates complementary shapes
+                correlation = np.corrcoef(curv1, curv2)[0, 1]
+                curvature_score = 1 + correlation  # Lower is better, perfect match = 0
+            else:
+                curvature_score = 1.0
+            
+            # Score 3: Endpoint alignment penalty
+            endpoint_penalty = np.linalg.norm(c1_test[-1] - c2[-1])
+            
+            # Combined score with weights
+            total_score = (geometric_score * 0.6 + 
+                          curvature_score * 0.3 + 
+                          endpoint_penalty * 0.1)
+            
+            best_score = min(best_score, total_score)
+    
+    return best_score
 
 def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int, float]:
     """
-    Improved edge matching function for puzzle pieces.
-    Returns the best matching score between any edge of piece0 and piece1.
+    Score matching between two puzzle pieces using shape complementarity and curvature.
     """
+    print(f"Scoring match between piece {i} and piece {j}")
     
     if i >= j:
         return (i, j, 0)
-
-    best_score = float('inf')
     
+    best_score = float('inf')
+    best_match_info = None
+    
+    # Compare all edge combinations
     for e0_idx, e0 in enumerate(piece0.edges_norm):
-        if e0.sign == 0:  # Skip flat edges
-            continue
-            
         for e1_idx, e1 in enumerate(piece1.edges_norm):
-            if e1.sign == 0:  # Skip flat edges
-                continue
-            #if e0.sign == e1.sign:  # Same sign edges don't match
-            #    continue
+            score = score_edge_match(e0.contour, e1.contour, e0.sign, e1.sign)
             
-            # Make copies to avoid modifying original data
-            contour0 = e0.contour.copy()[:, 0, :]  # Shape: (N, 2)
-            contour1 = e1.contour.copy()[:, 0, :]  # Shape: (M, 2)
-
-            
-            # Remove edge points to avoid boundary artifacts
-            trim_points = min(10, len(contour0)//4, len(contour1)//4)
-            if len(contour0) > 2 * trim_points:
-                contour0 = contour0[trim_points:-trim_points]
-            if len(contour1) > 2 * trim_points:
-                contour1 = contour1[trim_points:-trim_points]
-            
-            # remove first and last 20 points
-            contour0 = contour0[30:-30]
-            contour1 = contour1[30:-30]
-
-            # Try both orientations of the second contour
-            for flip in [False, True]:
-                c1 = contour1[::-1] if flip else contour1
-                
-                # Normalize both contours to same length using interpolation
-                target_length = min(len(contour0), len(c1), 100)  # Cap at 100 points
-                
-                # Resample contours to same length
-                def resample_contour(contour, target_len):
-                    if len(contour) <= 1:
-                        return contour
-                    
-                    # Create parameter array for original contour
-                    t_orig = np.linspace(0, 1, len(contour))
-                    t_new = np.linspace(0, 1, target_len)
-                    
-                    # Interpolate x and y coordinates separately
-                    x_new = np.interp(t_new, t_orig, contour[:, 0])
-                    y_new = np.interp(t_new, t_orig, contour[:, 1])
-                    
-                    return np.column_stack([x_new, y_new])
-                
-                c0_resampled = resample_contour(contour0, target_length)
-                c1_resampled = resample_contour(c1, target_length)
-                
-                if len(c0_resampled) < 2 or len(c1_resampled) < 2:
-                    continue
-                
-                # Normalize position: align start points
-                c0_normalized = c0_resampled - c0_resampled[0]
-                c1_normalized = c1_resampled - c1_resampled[0]
-                
-                # Normalize scale: make end-to-end distance the same
-                c0_length = np.linalg.norm(c0_normalized[-1] - c0_normalized[0])
-                c1_length = np.linalg.norm(c1_normalized[-1] - c1_normalized[0])
-                
-                if c0_length > 0 and c1_length > 0:
-                    c1_normalized = c1_normalized * (c0_length / c1_length)
-                
-                # Align end points by rotating c1
-                if np.linalg.norm(c0_normalized[-1]) > 0:
-                    # Calculate rotation angle to align end points
-                    v0 = c0_normalized[-1]
-                    v1 = c1_normalized[-1]
-                    
-                    angle0 = np.arctan2(v0[1], v0[0])
-                    angle1 = np.arctan2(v1[1], v1[0])
-                    rotation_angle = angle0 - angle1
-                    
-                    # Apply rotation to c1
-                    cos_a, sin_a = np.cos(rotation_angle), np.sin(rotation_angle)
-                    rotation_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-                    c1_normalized = np.dot(c1_normalized, rotation_matrix.T)
-                
-                # For male edges (positive sign), flip vertically to match with female
-                if e0.sign == 1:
-                    c0_normalized[:, 1] = -c0_normalized[:, 1]
-                if e1.sign == 1:
-                    c1_normalized[:, 1] = -c1_normalized[:, 1]
-                
-                # Calculate the matching score
-                # Use perpendicular distance as the primary metric
-                diff = c0_normalized - c1_normalized
-                
-                # Weight the middle points more heavily (they're more characteristic)
-                weights = np.exp(-((np.arange(len(diff)) - len(diff)/2) / (len(diff)/4))**2)
-                weights = weights / np.sum(weights)
-                
-                # Calculate weighted RMS distance
-                distances = np.linalg.norm(diff, axis=1)
-                score = np.sqrt(np.sum(weights * distances**2))
-                
-                # Penalize large endpoint misalignment
-                endpoint_penalty = np.linalg.norm(c0_normalized[-1] - c1_normalized[-1]) * 2
-                score += endpoint_penalty
-                
-                best_score = min(best_score, score)
-                
-                # Debug visualization for specific pair
-                if ((i == 4 and j == 5) or (i == 5 and j == 6)) and score == best_score:
-                    plt.figure(figsize=(12, 8))
-                    plt.subplot(1, 2, 1)
-                    plt.plot(c0_normalized[:, 0], c0_normalized[:, 1], 'b-', label=f'Piece {i} edge {e0_idx}', linewidth=2)
-                    plt.plot(c1_normalized[:, 0], c1_normalized[:, 1], 'r-', label=f'Piece {j} edge {e1_idx}', linewidth=2)
-                    plt.scatter(c0_normalized[0, 0], c0_normalized[0, 1], color='blue', s=100, marker='o', label='Start')
-                    plt.scatter(c0_normalized[-1, 0], c0_normalized[-1, 1], color='blue', s=100, marker='s', label='End')
-                    plt.scatter(c1_normalized[0, 0], c1_normalized[0, 1], color='red', s=100, marker='o')
-                    plt.scatter(c1_normalized[-1, 0], c1_normalized[-1, 1], color='red', s=100, marker='s')
-                    plt.axis('equal')
-                    plt.grid(True, alpha=0.3)
-                    plt.legend()
-                    plt.title(f'Normalized Edges - Score: {score:.2f}')
-                    
-                    plt.subplot(1, 2, 2)
-                    plt.plot(distances, 'g-', linewidth=2, label='Point distances')
-                    plt.plot(weights * np.max(distances), 'k--', alpha=0.7, label='Weights (scaled)')
-                    plt.xlabel('Point index')
-                    plt.ylabel('Distance')
-                    plt.legend()
-                    plt.title('Distance Profile')
-                    plt.grid(True, alpha=0.3)
-                    
-                    plt.tight_layout()
-                    plt.savefig(f"data/results/debug_match_{i}_{j}.png", dpi=200)
-                    plt.close()
+            if score < best_score:
+                best_score = score
+                best_match_info = (e0_idx, e1_idx, e0.sign, e1.sign)
+    
+    # Debug output
+    if best_match_info:
+        e0_idx, e1_idx, sign0, sign1 = best_match_info
+        print(f"  Best match: piece {i} edge {e0_idx} (sign {sign0}) with piece {j} edge {e1_idx} (sign {sign1})")
+        print(f"  Score: {best_score:.4f}")
+        
+        # Create detailed visualization for specific pairs
+        if (i, j) in [(4, 5), (0, 1), (2, 3)]:  # Add pairs you want to debug
+            visualize_match(piece0.edges_norm[e0_idx], piece1.edges_norm[e1_idx], i, j, e0_idx, e1_idx, best_score)
     
     return (i, j, best_score if best_score != float('inf') else 1e6)
 
+def visualize_match(edge0, edge1, piece0_id, piece1_id, edge0_id, edge1_id, score):
+    """Create a detailed visualization of edge matching."""
+    try:
+        norm0 = normalize_edge_for_matching(edge0.contour)
+        norm1 = normalize_edge_for_matching(edge1.contour)
+        
+        if norm0 is None or norm1 is None:
+            return
+            
+        # Apply the same transformations used in scoring
+        if edge0.sign == 1:
+            norm0[:, 1] = -norm0[:, 1]
+        if edge1.sign == 1:
+            norm1[:, 1] = -norm1[:, 1]
+        
+        plt.figure(figsize=(15, 5))
+        
+        # Plot 1: Original normalized edges
+        plt.subplot(1, 3, 1)
+        plt.plot(norm0[:, 0], norm0[:, 1], 'b-', linewidth=3, label=f'Piece {piece0_id} edge {edge0_id} ({edge0.color})')
+        plt.plot(norm1[:, 0], norm1[:, 1], 'r-', linewidth=3, label=f'Piece {piece1_id} edge {edge1_id} ({edge1.color})')
+        plt.scatter([norm0[0, 0], norm0[-1, 0]], [norm0[0, 1], norm0[-1, 1]], c='blue', s=100, marker='o')
+        plt.scatter([norm1[0, 0], norm1[-1, 0]], [norm1[0, 1], norm1[-1, 1]], c='red', s=100, marker='s')
+        plt.axis('equal')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.title(f'Normalized Edges\nScore: {score:.4f}')
+        
+        # Plot 2: Curvature profiles
+        plt.subplot(1, 3, 2)
+        curv0 = compute_curvature(norm0)
+        curv1 = compute_curvature(norm1)
+        plt.plot(curv0, 'b-', linewidth=2, label=f'Piece {piece0_id} curvature')
+        plt.plot(curv1, 'r-', linewidth=2, label=f'Piece {piece1_id} curvature')
+        plt.xlabel('Point index')
+        plt.ylabel('Curvature')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        correlation = np.corrcoef(curv0, curv1)[0, 1] if len(curv0) == len(curv1) and len(curv0) > 1 else 0
+        plt.title(f'Curvature Profiles\nCorrelation: {correlation:.3f}')
+        
+        # Plot 3: Distance profile
+        plt.subplot(1, 3, 3)
+        diff = norm0 - norm1
+        distances = np.linalg.norm(diff, axis=1)
+        plt.plot(distances, 'g-', linewidth=2, label='Point-to-point distance')
+        plt.axhline(y=np.mean(distances), color='orange', linestyle='--', label=f'Mean: {np.mean(distances):.3f}')
+        plt.xlabel('Point index')
+        plt.ylabel('Distance')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.title('Distance Profile')
+        
+        plt.tight_layout()
+        plt.savefig(f"data/results/match_debug_{piece0_id}_{piece1_id}_{edge0_id}_{edge1_id}.png", dpi=200, bbox_inches='tight')
+        plt.close()
+        
+    except Exception as e:
+        print(f"Visualization failed: {e}")
+        plt.close('all')
 
 def score_pieces(list_Images: list[Image], multiprocessing: bool = False) -> np.ndarray:
     from multiprocessing import Pool, cpu_count
@@ -677,6 +756,7 @@ if __name__ == "__main__":
     list_Images = preprocess_images()
 
     scores = score_pieces(list_Images)    
+    print(scores)
     plot_scores(scores)
 
 
