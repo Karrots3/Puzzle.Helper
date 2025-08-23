@@ -10,6 +10,7 @@ from scipy.signal import find_peaks
 import itertools
 import math
 
+# TYPE_OF_IMG = 
 
 class LoopingList(list):
     def __getitem__(self, i):
@@ -19,11 +20,13 @@ class LoopingList(list):
             return super().__getitem__(i)
         
 class Image(list):
-    def __init__(self, img: np.ndarray, contour: list[np.ndarray] | None = None, peaks: np.ndarray | None = None, edges: list[np.ndarray] | None = None):
+    def __init__(self, img: np.ndarray, contour: np.ndarray | None = None, peaks: np.ndarray | None = None, edges: list[np.ndarray] | None = None, edges_norm: list[np.ndarray] | None = None):
         self.img = img
-        self.contour = contour if contour is not None else []
+        self.contour = contour if contour is not None else np.array([])
         self.peaks = peaks if peaks is not None else np.array([])
-        self.edges = edges if edges is not None else []
+        self.edges = edges if edges is not None else np.array([])
+        self.edges_norm = edges_norm if edges_norm is not None else np.array([])
+        assert len(self.edges) == len(self.edges_norm)
 
 def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
     h, w = img.shape[:2]
@@ -67,9 +70,12 @@ THICKNESS_CONTOUR = 3
 THICKNESS_LINES = 8
 THICKNESS_PEAKS = 8
 
-RADIUS_PEAKS = 5
+RADIUS_PEAKS = 15
 
 
+################################################################################
+# Plotting functions
+################################################################################
 def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.ndarray], list_peaks: list[np.ndarray], list_edges: list[list[np.ndarray]], n_cols: int, only_contour = False) -> None:
     n_rows = len(list_images) // n_cols
     
@@ -96,7 +102,7 @@ def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.n
                 display_img = img.copy()
         
         # Draw contour
-        if contour:
+        if len(contour) > 0:
             cv2.drawContours(
                 display_img,
                 contour,
@@ -137,6 +143,16 @@ def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.n
     # cv2.imshow("Subplots", combined_img)
     # cv2.waitKey(0)
     # cv2.destroyAllWindows()
+
+def plot_images(list_images: list[Image], only_contour: bool = False) -> None:
+    plot_subplots_images(
+        [i.img for i in list_images],
+        [i.contour for i in list_images],
+        [i.peaks for i in list_images],
+        [i.edges for i in list_images],
+        n_cols=len(list_images),
+        only_contour=only_contour
+    )
 
 def plot_edges(list_edges: list[list[np.ndarray]]) -> None:
     list_edges = [l for l in list_edges if len(l) > 0]
@@ -186,8 +202,8 @@ def main():
     list_edges = []
     list_edges_norm = []
     for ti, file in enumerate(list_files):
-        img = cv2.imread(str(file))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img: np.ndarray = cv2.imread(str(file)) # 3000,4000,3
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) # 3000,4000
         img = trim_image(img,60)
         #list_photos.append(img)
         #list_contours.append([])
@@ -204,19 +220,20 @@ def main():
         # contour = [c for c in contour if 100 < cv2.contourArea(c) < 1e6]
         # list_contours.append(contour)
         # list_photos.append(th3)
-
+        
+        # TODO: check in the array for actual values
         _,img= cv2.threshold(img,110,255,cv2.THRESH_BINARY)# + cv2.THRESH_OTSU)
-        contour, _= cv2.findContours(img,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-        contour = [c for c in contour if 100 < cv2.contourArea(c) < 1e6]
-        assert len(contour) == 1
-        contour=contour
+        contours, _= cv2.findContours(img,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        contours = [c for c in contours if 100 < cv2.contourArea(c) < 1e6]
+        assert len(contours) == 1
+        contour: np.ndarray = contours[0]
         list_photos.append(img)
         list_contours.append(contour)
         list_peaks.append([])
         list_edges.append([])
         list_edges_norm.append([])
 
-        #cent_contour=contour[0]
+        #cent_contour=contour
         #cent_contour[:,:,0] -= np.mean(cent_contour[:,:,0]).astype(int)
         #cent_contour[:,:,1] -= np.mean(cent_contour[:,:,1]).astype(int)
 
@@ -225,11 +242,11 @@ def main():
 
         #distances_from_center = np.sum(cent_contour**2,axis=2)[:,0]
         #peaks_idx = list(find_peaks(distances_from_center,distance=min_dist_peaks)[0].astype(int))
-        #peaks = contour[0][peaks_idx][:,0,:]
+        #peaks = contour[peaks_idx][:,0,:]
         #list_peaks.append(peaks)
 
-        (cx, cy), cr = cv2.minEnclosingCircle(contour[0])
-        centered_contour = contour[0] - np.array([cx, cy])
+        (cx, cy), cr = cv2.minEnclosingCircle(contour)
+        centered_contour = contour - np.array([cx, cy])
 
         # ensure peaks are not at start or end of the distances array
         distances = np.sum(centered_contour**2, axis=2)[:, 0]
@@ -254,7 +271,7 @@ def main():
         peak_indices.sort()
         list_photos.append(img)
         list_contours.append(contour)
-        list_peaks.append(contour[0][peak_indices,0,:])
+        list_peaks.append(contour[peak_indices,0,:])
         list_edges.append([])
         list_edges_norm.append([])
 
@@ -264,7 +281,7 @@ def main():
         # select the one that better approximate a rectangle
         def compute_rectangle_error(indices):
             # get coordinates of corners
-            corners = LoopingList(np.take(contour[0], sorted(list(indices)), axis=0)[:, 0, :])
+            corners = LoopingList(np.take(contour, sorted(list(indices)), axis=0)[:, 0, :])
             # compute the side lengths and diagonal lengths
             lengths = [math.sqrt(np.sum((corners[i0] - corners[i1])**2)) for i0, i1 in [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)]]
             def f_error(a, b):
@@ -282,21 +299,21 @@ def main():
 
         list_photos.append(img)
         list_contours.append(contour)
-        list_peaks.append(contour[0][indices,0,:])
+        list_peaks.append(contour[indices,0,:])
         list_edges.append([])
         list_edges_norm.append([])
 
         # # Extract edges
         edges = [
-            contour[0][range(indices[0], indices[1]),0,:],
-            contour[0][range(indices[1], indices[2]),0,:],
-            contour[0][range(indices[2], indices[3]),0,:],
-            contour[0][list(range(indices[3], len(contour[0]))) + list(range(0, indices[0])),0,:],
+            contour[range(indices[0], indices[1]),0,:],
+            contour[range(indices[1], indices[2]),0,:],
+            contour[range(indices[2], indices[3]),0,:],
+            contour[list(range(indices[3], len(contour))) + list(range(0, indices[0])),0,:],
         ]
         
         list_photos.append(img)
         list_contours.append(contour)
-        list_peaks.append(contour[0][indices,0,:])
+        list_peaks.append(contour[indices,0,:])
         list_edges.append([])
         list_edges_norm.append([])
 
@@ -336,7 +353,7 @@ def main():
         # # Rotate edges
         list_photos.append(img)
         list_contours.append(contour)
-        list_peaks.append(contour[0][indices,0,:])
+        list_peaks.append(contour[indices,0,:])
         list_edges.append(edges)
         list_edges_norm.append(edges_norm)
 
