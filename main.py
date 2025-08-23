@@ -20,15 +20,29 @@ class LoopingList(list):
             return super().__getitem__(i % len(self))
         else:
             return super().__getitem__(i)
+
+class Edge():
+    def __init__(self, contour: np.ndarray, sign: int):
+        self.contour = contour
+        self.sign = sign
+        self.color = "blue" if sign == 1 else "red" if sign == -1 else "green"
         
 class Image(list):
-    def __init__(self, img: np.ndarray, contour: np.ndarray | None = None, peaks: np.ndarray | None = None, edges: list[np.ndarray] | None = None, edges_norm: list[np.ndarray] | None = None):
+    def __init__(self, 
+                 img: np.ndarray, 
+                 contour: np.ndarray,
+                 peaks_idx: list[int],
+                 peaks: np.ndarray,
+                 edges: list[np.ndarray],
+                 edges_norm: list[Edge]
+                 ):
         self.img = img
-        self.contour = contour if contour is not None else np.array([])
-        self.peaks = peaks if peaks is not None else np.array([])
-        self.edges = edges if edges is not None else np.array([])
-        self.edges_norm = edges_norm if edges_norm is not None else np.array([])
-        assert len(self.edges)==0 or len(self.edges_norm)==0 or len(self.edges) == len(self.edges_norm)
+        self.contour = contour
+        self.peaks_idx = peaks_idx
+        self.peaks = peaks
+        self.edges = edges
+        self.edges_norm = edges_norm
+        
 
 def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
     h, w = img.shape[:2]
@@ -83,6 +97,15 @@ RADIUS_PEAKS = 15
 ################################################################################
 # Plotting functions
 ################################################################################
+def plot_edges(edges_norm: list[Edge], id_image: int):  
+    plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
+    plt.title(f"Normalized edges {id_image}")
+    plt.ylim(-400,400)
+    for edge in edges_norm:
+        plt.scatter(edge.contour[:, 0, 0], edge.contour[:, 0, 1], color=edge.color, s=1)
+    plt.savefig(f"data/results/plt_edge_{id_image}.png", bbox_inches='tight')
+    plt.close()
+
 def plot_subplots_images(list_images: list[np.ndarray], list_contours: list[np.ndarray], list_peaks: list[np.ndarray], list_edges: list[list[np.ndarray]], n_cols: int, only_contour = False) -> None:
     n_rows = len(list_images) // n_cols
     
@@ -233,55 +256,13 @@ def plot_images(list_images: list[Image], n_cols: int, only_contour: bool = Fals
     # cv2.waitKey(0)
     # cv2.destroyAllWindows()
 
-def plot_edges(list_edges: list[list[np.ndarray]]) -> None:
-    list_edges = [l for l in list_edges if len(l) > 0]
-    if not list_edges:
-        return
-        
-    n_cols = 4
-    n_rows = math.ceil(len(list_edges) / n_cols)
-    
-    # Calculate bounds for all edges
-    min_x = min(min(edge[:,0]) for edges in list_edges for edge in edges)
-    min_y = min(min(edge[:,1]) for edges in list_edges for edge in edges)
-    max_x = max(max(edge[:,0]) for edges in list_edges for edge in edges)
-    max_y = max(max(edge[:,1]) for edges in list_edges for edge in edges)
 
-    height = int(max_y - min_y + 100)  # Add padding
-    width = int(max_x - min_x + 100)   # Add padding
-    combined_img = np.zeros((n_rows * height, n_cols * width, 3), dtype=np.uint8)
-
-    colors = [
-        color_string_to_tuple("red"),
-        color_string_to_tuple("green"),
-        color_string_to_tuple("blue"),
-        color_string_to_tuple("yellow")
-    ]
-    for i, edges in enumerate(list_edges):
-        row = i // n_cols
-        col = i % n_cols
-        single_img = np.zeros((height, width, 3), dtype=np.uint8)
-        
-        for edge,c  in zip(edges, colors):
-            # Convert edge to integer coordinates and shift to center of single_img
-            edge_coords = edge.astype(np.int32)
-            edge_coords[:, 0] = edge_coords[:, 0] - min_x + 50  # Shift to center with padding
-            edge_coords[:, 1] = edge_coords[:, 1] - min_y + 50  # Shift to center with padding
-            
-            # Reshape for cv2.drawContours (needs to be 3D array)
-            edge_contour = edge_coords.reshape(-1, 1, 2)
-            cv2.drawContours(single_img, [edge_contour], -1, c, THICKNESS_LINES)
-
-        combined_img[row*height:(row+1)*height, col*width:(col+1)*width] = single_img
-
-    cv2.imwrite(f"data/results/edges.png", combined_img)
-
-def main():
+def preprocess_images():
     out_path = Path("data/results")
     out_path.mkdir(parents=True, exist_ok=True)
     list_files = [Path(f) for f in Path("data").glob("*.JPG")]
     
-    list_Images = []
+    list_Images: list[Image] = []
     list_photos = []
     list_contours = []
     list_peaks = []
@@ -319,7 +300,6 @@ def main():
         list_peaks.append([])
         list_edges.append([])
         list_edges_norm.append([])
-        list_Images.append(Image(img, contour, [], [], []))
 
         
         (cx, cy), cr = cv2.minEnclosingCircle(contour)
@@ -351,7 +331,6 @@ def main():
         list_peaks.append(contour[peak_indices,0,:])
         list_edges.append([])
         list_edges_norm.append([])
-        list_Images.append(Image(img, contour, contour[peak_indices,0,:], [], []))
 
 
     
@@ -383,7 +362,6 @@ def main():
         list_peaks.append(contour[peak_indices,0,:])
         list_edges.append([])
         list_edges_norm.append([])
-        list_Images.append(Image(img, contour, contour[peak_indices,0,:], [], []))
         
         # Edges
         def extract_edges(contour, indices):
@@ -410,7 +388,6 @@ def main():
         list_peaks.append(contour[peak_indices,0,:])
         list_edges.append(edges)
         list_edges_norm.append([])
-        list_Images.append(Image(img, contour, contour[peak_indices,0,:], edges, []))
 
 
         # Normalized edges
@@ -421,14 +398,10 @@ def main():
             [peak_indices[3], peak_indices[0]],
         ]
 
-        edges_norm = []
-        plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
-        plt.title(f"Normalized edges {count_image}")
-        plt.ylim(-400,400)
+        edges_norm:list[Edge] = []
         for c, (idx0, idx1) in enumerate(idx):
             p0 = contour[idx0,0,:]
             p1 = contour[idx1,0,:]
-            #center_points = (p0 + p1) / 2
             
             # Calculate the direction vector and straight length
             dx, dy = p1 - p0
@@ -438,26 +411,22 @@ def main():
             angle_degrees = math.degrees(math.atan2(dy, dx))
             
             # Create transform to normalize: first point at (0, 0), last point at (X, 0)
-            # Replace get_contour_transform with actual implementation
-            center = p0 # -> becomes (0,0)
+            center = p0 
             matrix = cv2.getRotationMatrix2D(center.astype(np.float32), angle_degrees, 1)
             translate = (0, 0) - center
             transform = (matrix, translate)
             
             # Apply transform to the entire piece contour
-            # Replace transform_contour with actual implementation
             matrix, translate = transform
             normalized_piece_contour = cv2.transform(contour, matrix) + translate
             
             # Extract just the edge contour
-            # Replace sub_contour with actual implementation
             if idx1 + 1 > idx0:
                 normalized_edge_contour = normalized_piece_contour[idx0:idx1 + 1]
             else:
                 normalized_edge_contour = np.concatenate([normalized_piece_contour[idx0:], normalized_piece_contour[:idx1 + 1]])
             
             # Transform the piece center
-            # Replace transform_point with actual implementation
             matrix, translate = transform
             normalized_piece_center = (cv2.transform(np.array([[center]]), matrix) + translate)[0, 0]
             
@@ -465,42 +434,45 @@ def main():
             heights = normalized_edge_contour[:, 0, 1]
             if np.max(np.abs(heights)) < 10:
                 sign = 0
-            elif np.max(np.abs(heights)) > 10:
-                sign = 1 if np.max(heights) > -np.min(heights) else -1
+            #elif np.max(np.abs(heights)) > 10:
             else:
-                sign = -1
+                sign = -1 if np.max(heights) > -np.min(heights) else 1
             
             # For male contours (sign == 1), rotate by 180° for easier matching with female contours
+            #if sign == 1:
+            #    angle_degrees += 180
+            #    # Replace get_contour_transform with actual implementation
+            #    center_point = contour[idx1,0,:]
+            #    matrix = cv2.getRotationMatrix2D(center_point.astype(np.float32), angle_degrees, 1)
+            #    translate = (0, 0) - center_point
+            #    transform = (matrix, translate)
+            #    
+            #    # Replace transform_contour with actual implementation
+            #    matrix, translate = transform
+            #    normalized_piece_contour = cv2.transform(contour, matrix) + translate
+            #    
+            #    # Replace transform_point with actual implementation
+            #    normalized_piece_center = (cv2.transform(np.array([[center_point]]), matrix) + translate)[0, 0]
             if sign == 1:
-                angle_degrees += 180
-                # Replace get_contour_transform with actual implementation
-                center_point = contour[idx1,0,:]
-                matrix = cv2.getRotationMatrix2D(center_point.astype(np.float32), angle_degrees, 1)
-                translate = (0, 0) - center_point
-                transform = (matrix, translate)
-                
-                # Replace transform_contour with actual implementation
-                matrix, translate = transform
-                normalized_piece_contour = cv2.transform(contour, matrix) + translate
-                
-                # Replace transform_point with actual implementation
-                normalized_piece_center = (cv2.transform(np.array([[center_point]]), matrix) + translate)[0, 0]
+                normalized_edge_contour[:,:,1] = -normalized_edge_contour[:,:,1]
 
-            color = "blue" if sign == 1 else "red" if sign == -1 else "green"
-            plt.scatter(normalized_edge_contour[:, 0, 0], normalized_edge_contour[:, 0, 1], color=color, s=1)
+            edges_norm.append(Edge(normalized_edge_contour, sign))
 
-            edges_norm.append(normalized_edge_contour)
- 
-        plt.savefig(f"data/results/plt_edge_{count_image}.png", bbox_inches='tight')
-        plt.close()
+        plot_edges(edges_norm = edges_norm, id_image=count_image)
+
+        # END PREPROCESSING
+        new_image = Image(img, contour, peak_indices, contour[peak_indices,0,:], edges, edges_norm)
+        print(new_image)
+        list_Images.append(new_image)
 
     plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=True)
     plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=False)
 
-    #plot_images(list_Images, n_cols=len(list_photos)//len(list_files), only_contour=True)
+    return list_Images
 
-    plot_edges(list_edges_norm)
 
 
 if __name__ == "__main__":
-    main()
+    list_Images = preprocess_images()
+
+    print(list_Images)
