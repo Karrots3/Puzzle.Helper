@@ -29,7 +29,7 @@ class Edge():
         
 class Image():
     def __init__(self, 
-                 count_image: int,
+                 img_id: int,
                  img: np.ndarray, 
                  contour: np.ndarray,
                  peaks_idx: list[int],
@@ -38,8 +38,8 @@ class Image():
                  edges_norm: list[Edge]
                  ):
         super().__init__()  # Initialize the parent list class
-        self.count_image = count_image
-        self.name = f"{count_image:04d}"
+        self.img_id = img_id
+        self.name = f"{img_id:04d}"
         self.img = img
         self.contour = contour
         self.peaks_idx = peaks_idx
@@ -273,6 +273,7 @@ def preprocess_images():
     out_path = Path("data/results")
     out_path.mkdir(parents=True, exist_ok=True)
     list_files = [Path(f) for f in Path("data").glob("*.JPG")]
+    list_files.sort()
     
     list_Images: list[Image] = []
     list_photos = []
@@ -281,6 +282,8 @@ def preprocess_images():
     list_edges = []
     list_edges_norm = []
     for count_image, file in enumerate(list_files):
+        img_name = file.stem
+        img_id = int(img_name)
         img: np.ndarray = cv2.imread(str(file)) # 3000,4000,3
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) # 3000,4000
         img = trim_image(img,60)
@@ -473,24 +476,139 @@ def preprocess_images():
         plot_edges(edges_norm = edges_norm, id_image=count_image)
 
         # END PREPROCESSING
-        new_image = Image(count_image ,img, contour, peak_indices, contour[peak_indices,0,:], edges, edges_norm)
+        new_image = Image(img_id ,img, contour, peak_indices, contour[peak_indices,0,:], edges, edges_norm)
         print(new_image)
         list_Images.append(new_image)
 
     plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=True)
     plot_subplots_images(list_photos,list_contours,list_peaks,list_edges,n_cols=len(list_photos)//len(list_files), only_contour=False)
 
+    list_Images.sort(key=lambda x: x.img_id)
     return list_Images
 
 ################################################################################
 # Matching functions
 ################################################################################
-def match_pieces(list_Images: list[Image]):
-    pass
+def plot_scores(scores: np.ndarray):
+    scores[scores == 0] = np.nan
+    scores = np.log10(scores)
+    
+    plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
+    plt.title("Scores")
+    plt.xlabel("Piece 0")
+    plt.ylabel("Piece 1")
+    plt.xticks(range(len(scores)))
+    plt.yticks(range(len(scores)))
+
+    # plot the score matrix
+    plt.imshow(scores, cmap="viridis")
+    plt.colorbar(label="Score")
+
+    plt.savefig(f"data/results/08_scores.png", bbox_inches='tight')
+    plt.close()
+
+
+def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int, float]:#
+    print(f"Scoring match between piece {i} and piece {j}")
+    if i >= j:
+        print(f"Piece {i} is greater than piece {j} or equal to it")
+        return (i,j,0)
+
+    scores_match = []
+    for e0 in piece0.edges_norm:
+        if e0.sign == 0:
+            print(f"Piece {i} has a flat edge")
+            continue
+        e0.contour = e0.contour[10:-10]
+
+        for e1 in piece1.edges_norm:
+            if e1.sign == 0:
+                print(f"Piece {j} has a flat edge")
+                continue
+            if e0.sign == e1.sign:
+                print(f"Piece {i} and piece {j} have the same sign")
+                continue
+
+            e1.contour = e1.contour[10:-10]
+            
+            for inv in [1, -1]:
+                # FIX EDGES LENGTHS
+                # IF LENGTHS ARE DIFFERENT:
+                # 1. remove the points from the longer edge until they are the same length
+                diff_length = len(e0.contour) - len(e1.contour)
+                if diff_length > 0:
+                    e0.contour = e0.contour[diff_length//2:-diff_length//2,:,:]
+                    # 2. make center coordinates of e0 become the same as e1
+                    p0 = e0.contour[0,0,:]
+                    p1 = e0.contour[-1,0,:]
+                    dx, dy = p1 - p0
+                    angle_degrees=0
+                    center = p0 
+                    matrix = cv2.getRotationMatrix2D(center.astype(np.float32), angle_degrees, 1)
+                    translate = (0, 0) - center
+                    transform = (matrix, translate)
+                    matrix, translate = transform
+                    e0.contour = cv2.transform(e0.contour, matrix) + translate
+                    
+                elif diff_length < 0:
+                    diff_length = -diff_length
+                    e1.contour = e1.contour[diff_length//2:-diff_length//2,:,:]
+                    # 2. make center coordinates of e1 become the same as e0
+                    p0 = e1.contour[0,0,:]
+                    p1 = e1.contour[0,0,:]
+                    dx, dy = p1 - p0
+                    angle_degrees=0
+                    center = p0 
+                    matrix = cv2.getRotationMatrix2D(center.astype(np.float32), angle_degrees, 1)
+                    translate = (0, 0) - center
+                    transform = (matrix, translate)
+                    matrix, translate = transform
+                    e1.contour = cv2.transform(e1.contour, matrix) + translate
+                
+                # compute the score
+                diff = e0.contour - e1.contour[::inv]
+                offset = np.mean(diff, axis=0)
+                score = np.sum((diff - offset)**2)
+        
+                scores_match.append(score)
+
+                if i==4 and j==5:
+                    plt.figure(figsize=(10, 8), dpi=400, tight_layout=True)
+                    plt.title(f"Edges {i} {j}, score: {score:.3e}")
+                    plt.plot(e0.contour[:,0,0], e0.contour[:,0,1], label="e0")
+                    plt.plot(e1.contour[:,0,0], e1.contour[:,0,1], label="e1")
+                    plt.legend()
+                    plt.show()
+                    plt.close()
+    print(scores_match)
+
+    return (i,j,np.min(scores_match))
+
+
+def score_pieces(list_Images: list[Image], multiprocessing: bool = False) -> np.ndarray:
+    from multiprocessing import Pool, cpu_count
+
+    # Calculate parallely score between all pieces
+    if multiprocessing:
+        with Pool(cpu_count()) as pool:
+            scores = pool.starmap(score_match, [(i, piece0, j, piece1) for i,piece0 in enumerate(list_Images) for j,piece1 in enumerate(list_Images) ])
+    else:
+        scores = [score_match(i, piece0, j, piece1) for i,piece0 in enumerate(list_Images) for j,piece1 in enumerate(list_Images) ]
+
+    scores_matrix = np.zeros((len(list_Images), len(list_Images)))
+    for i,j,score in scores:
+        scores_matrix[i,j] = score
+
+    #scores_matrix = scores_matrix + scores_matrix.T
+
+    return scores_matrix
+        
 
 
 
 if __name__ == "__main__":
     list_Images = preprocess_images()
 
-    matches = match_pieces(list_Images)
+    scores = score_pieces(list_Images)    
+    print(scores)
+    plot_scores(scores)
