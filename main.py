@@ -27,8 +27,9 @@ class Edge():
         self.sign = sign
         self.color = "blue" if sign == 1 else "red" if sign == -1 else "green"
         
-class Image(list):
+class Image():
     def __init__(self, 
+                 count_image: int,
                  img: np.ndarray, 
                  contour: np.ndarray,
                  peaks_idx: list[int],
@@ -36,12 +37,21 @@ class Image(list):
                  edges: list[np.ndarray],
                  edges_norm: list[Edge]
                  ):
+        super().__init__()  # Initialize the parent list class
+        self.count_image = count_image
+        self.name = f"{count_image:04d}"
         self.img = img
         self.contour = contour
         self.peaks_idx = peaks_idx
         self.peaks = peaks
         self.edges = edges
         self.edges_norm = edges_norm
+    
+    def __str__(self):
+        return f"Image(name={self.name}, shape={self.img.shape}, peaks={len(self.peaks_idx)}, edges={len(self.edges)})"
+    
+    def __repr__(self):
+        return self.__str__()
         
 
 def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
@@ -256,7 +266,9 @@ def plot_images(list_images: list[Image], n_cols: int, only_contour: bool = Fals
     # cv2.waitKey(0)
     # cv2.destroyAllWindows()
 
-
+################################################################################
+# Preprocessing functions
+################################################################################
 def preprocess_images():
     out_path = Path("data/results")
     out_path.mkdir(parents=True, exist_ok=True)
@@ -461,7 +473,7 @@ def preprocess_images():
         plot_edges(edges_norm = edges_norm, id_image=count_image)
 
         # END PREPROCESSING
-        new_image = Image(img, contour, peak_indices, contour[peak_indices,0,:], edges, edges_norm)
+        new_image = Image(count_image ,img, contour, peak_indices, contour[peak_indices,0,:], edges, edges_norm)
         print(new_image)
         list_Images.append(new_image)
 
@@ -470,9 +482,15 @@ def preprocess_images():
 
     return list_Images
 
+################################################################################
+# Matching functions
+################################################################################
+def match_pieces(list_Images: list[Image]):
+    pass
+
 
 
 if __name__ == "__main__":
     list_Images = preprocess_images()
 
-    print(list_Images)
+    matches = match_pieces(list_Images)
