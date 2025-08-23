@@ -575,23 +575,82 @@ def normalize_edge_for_matching(edge_contour, target_length=50):
     
     return resampled
 
-def score_edge_match(contour1, contour2, sign1, sign2):
+def sliding_window_match(c1, c2, window_size=0.8):
+    """
+    Compare two contours using sliding window to handle misalignment.
+    Returns the best score from all possible alignments.
+    """
+    best_score = float('inf')
+    best_offset = 0
+    
+    # Calculate how many points to slide (percentage of contour length)
+    max_offset = int(len(c2) * (1 - window_size) / 2)
+    
+    for offset in range(-max_offset, max_offset + 1):
+        # Create sliding window of c2
+        start_idx = max(0, offset)
+        end_idx = min(len(c2), offset + int(len(c2) * window_size))
+        
+        if end_idx <= start_idx:
+            continue
+            
+        c2_window = c2[start_idx:end_idx]
+        
+        # Adjust c1 to match window length
+        target_len = len(c2_window)
+        if target_len < len(c1):
+            # Trim c1 from both ends equally
+            trim_start = (len(c1) - target_len) // 2
+            trim_end = trim_start + target_len
+            c1_adjusted = c1[trim_start:trim_end]
+        else:
+            c1_adjusted = c1
+        
+        # Resample both to same length for comparison
+        min_len = min(len(c1_adjusted), len(c2_window))
+        if min_len < 5:  # Skip if too short
+            continue
+            
+        c1_resampled = c1_adjusted[np.linspace(0, len(c1_adjusted)-1, min_len, dtype=int)]
+        c2_resampled = c2_window[np.linspace(0, len(c2_window)-1, min_len, dtype=int)]
+        
+        # Align starting points
+        c1_aligned = c1_resampled - c1_resampled[0]
+        c2_aligned = c2_resampled - c2_resampled[0]
+        
+        # Scale to same end-to-end distance
+        c1_length = np.linalg.norm(c1_aligned[-1] - c1_aligned[0])
+        c2_length = np.linalg.norm(c2_aligned[-1] - c2_aligned[0])
+        
+        if c1_length > 1e-6 and c2_length > 1e-6:
+            c2_aligned = c2_aligned * (c1_length / c2_length)
+        
+        # Compute score
+        diff = c1_aligned - c2_aligned
+        score = np.mean(np.linalg.norm(diff, axis=1))
+        
+        if score < best_score:
+            best_score = score
+            best_offset = offset
+    
+    return best_score, best_offset
+
+def score_edge_match(contour1, contour2, sign1, sign2, do_complementary: bool = False) -> tuple[float, dict]:
     """Score how well two edge contours match (lower is better)."""
     
     # Only opposite signs can match
     if sign1 == sign2 or sign1 == 0 or sign2 == 0:
-        return float('inf')
+        return float('inf'), {}
     
     # Normalize both contours
-    contour1 = contour1[30:-30]
-    contour2 = contour2[30:-30]
     norm1 = normalize_edge_for_matching(contour1)
     norm2 = normalize_edge_for_matching(contour2)
     
     if norm1 is None or norm2 is None:
-        return float('inf')
+        return float('inf'), {}
     
     best_score = float('inf')
+    best_match_details = None
     
     # Try all four orientations
     for flip1 in [False, True]:
@@ -599,42 +658,67 @@ def score_edge_match(contour1, contour2, sign1, sign2):
             c1 = norm1[::-1] if flip1 else norm1
             c2 = norm2[::-1] if flip2 else norm2
             
-            # For complementarity: if one is male (+1), flip it vertically
-            if sign1 == 1:  # c1 is male
-                c1_test = c1.copy()
-                c1_test[:, 1] = -c1_test[:, 1]
-            else:  # c1 is female, so c2 must be male
-                c1_test = c1.copy()
-                c2 = c2.copy()
-                c2[:, 1] = -c2[:, 1]
+            # # For complementarity: if one is male (+1), flip it vertically
+            # if sign1 == 1:  # c1 is male
+            #     c1_test = c1.copy()
+            #     c1_test[:, 1] = -c1_test[:, 1]
+            #     c2_test = c2.copy()
+            # else:  # c1 is female, so c2 must be male
+            #     c1_test = c1.copy()
+            #     c2_test = c2.copy()
+            #     c2_test[:, 1] = -c2_test[:, 1]
+            c1_test = c1.copy()
+            c2_test = c2.copy()
+
             
-            # Compute curvatures
+            # Method 1: Direct alignment (original approach)
+            diff_direct = c1_test - c2_test
+            geometric_score_direct = np.mean(np.linalg.norm(diff_direct, axis=1))
+            
+            # Method 2: Sliding window match
+            sliding_score, best_offset = sliding_window_match(c1_test, c2_test)
+            
+            # Method 3: Curvature complementarity
             curv1 = compute_curvature(c1_test)
-            curv2 = compute_curvature(c2)
+            curv2 = compute_curvature(c2_test)
             
-            # Score 1: Direct point-to-point distance after alignment
-            diff = c1_test - c2
-            geometric_score = np.mean(np.linalg.norm(diff, axis=1))
-            
-            # Score 2: Curvature complementarity (should be negatively correlated)
             if len(curv1) == len(curv2) and len(curv1) > 1:
-                # Negative correlation indicates complementary shapes
                 correlation = np.corrcoef(curv1, curv2)[0, 1]
                 curvature_score = 1 + correlation  # Lower is better, perfect match = 0
             else:
                 curvature_score = 1.0
             
-            # Score 3: Endpoint alignment penalty
-            endpoint_penalty = np.linalg.norm(c1_test[-1] - c2[-1])
+            # Method 4: Endpoint alignment penalty
+            endpoint_penalty = np.linalg.norm(c1_test[-1] - c2_test[-1])
             
-            # Combined score with weights
-            total_score = (geometric_score * 0.6 + 
-                          curvature_score * 0.3 + 
-                          endpoint_penalty * 0.1)
+            # Combined score with weights - use sliding match as primary geometric score
+            geometric_score = min(geometric_score_direct, sliding_score)
             
-            best_score = min(best_score, total_score)
+            # calculate integrals
+            #integral1 
+            #area_score = abs(area1 - area2) / max(area1,area2)
+            #
+            #if area_score > 0.2:
+            #    area_score = float('inf')
+            #else:
+            total_score = (geometric_score * 0.5 +           # Primary: best geometric match
+                          sliding_score * 0.2 +              # Secondary: sliding window robustness  
+                          curvature_score * 0.2 +            # Shape complementarity
+                          endpoint_penalty * 0.1)            # Endpoint consistency
+            
+            #print(f"flip1: {flip1}, flip2: {flip2}, total_score: {total_score}, correlation: {curvature_score}, endpoint_penalty: {endpoint_penalty}")
+            if total_score < best_score:
+                best_score = total_score
+                best_match_details = {
+                    'flip1': flip1, 'flip2': flip2,
+                    'geometric_direct': geometric_score_direct,
+                    'sliding_score': sliding_score,
+                    'sliding_offset': best_offset,
+                    'curvature_score': curvature_score,
+                    'endpoint_penalty': endpoint_penalty
+                }
     
-    return best_score
+    return (best_score, best_match_details)
 
 def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int, float]:
     """
@@ -643,6 +727,7 @@ def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int,
     print(f"Scoring match between piece {i} and piece {j}")
     
     if i >= j:
+        print(f"Skipping match between piece {i} and piece {j}")
         return (i, j, 0)
     
     best_score = float('inf')
@@ -651,21 +736,22 @@ def score_match(i: int, piece0: Image, j: int, piece1: Image) -> tuple[int, int,
     # Compare all edge combinations
     for e0_idx, e0 in enumerate(piece0.edges_norm):
         for e1_idx, e1 in enumerate(piece1.edges_norm):
-            score = score_edge_match(e0.contour, e1.contour, e0.sign, e1.sign)
+            score, info = score_edge_match(e0.contour, e1.contour, e0.sign, e1.sign)
             
             if score < best_score:
                 best_score = score
-                best_match_info = (e0_idx, e1_idx, e0.sign, e1.sign)
+                best_match_info = (e0_idx, e1_idx, e0.sign, e1.sign, info)
     
     # Debug output
     if best_match_info:
-        e0_idx, e1_idx, sign0, sign1 = best_match_info
+        e0_idx, e1_idx, sign0, sign1, info = best_match_info
         print(f"  Best match: piece {i} edge {e0_idx} (sign {sign0}) with piece {j} edge {e1_idx} (sign {sign1})")
         print(f"  Score: {best_score:.4f}")
         
         # Create detailed visualization for specific pairs
-        if (i, j) in [(4, 5), (0, 1), (2, 3)]:  # Add pairs you want to debug
-            visualize_match(piece0.edges_norm[e0_idx], piece1.edges_norm[e1_idx], i, j, e0_idx, e1_idx, best_score)
+        visualize_match(piece0.edges_norm[e0_idx], piece1.edges_norm[e1_idx], i, j, e0_idx, e1_idx, best_score)
+    else:
+        print(f"No match found between piece {i} and piece {j}")
     
     return (i, j, best_score if best_score != float('inf') else 1e6)
 
@@ -678,11 +764,11 @@ def visualize_match(edge0, edge1, piece0_id, piece1_id, edge0_id, edge1_id, scor
         if norm0 is None or norm1 is None:
             return
             
-        # Apply the same transformations used in scoring
-        if edge0.sign == 1:
-            norm0[:, 1] = -norm0[:, 1]
-        if edge1.sign == 1:
-            norm1[:, 1] = -norm1[:, 1]
+        ## Apply the same transformations used in scoring
+        #if edge0.sign == 1:
+        #    norm0[:, 1] = -norm0[:, 1]
+        #if edge1.sign == 1:
+        #    norm1[:, 1] = -norm1[:, 1]
         
         plt.figure(figsize=(15, 5))
         
@@ -730,6 +816,7 @@ def visualize_match(edge0, edge1, piece0_id, piece1_id, edge0_id, edge1_id, scor
     except Exception as e:
         print(f"Visualization failed: {e}")
         plt.close('all')
+
 
 def score_pieces(list_Images: list[Image], multiprocessing: bool = False) -> np.ndarray:
     from multiprocessing import Pool, cpu_count
