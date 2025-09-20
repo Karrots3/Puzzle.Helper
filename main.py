@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 
-def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
+def image_trim(img: np.ndarray, radius: int = 100) -> np.ndarray:
     h, w = img.shape[:2]
     center_x, center_y = w // 2, h // 2
 
@@ -25,7 +25,7 @@ def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
     return img
 
 
-def plot_subplots_images(list_images: list[np.ndarray], n_cols: int = 4, contours = None, only_contours = False) -> None:
+def image_plot_subplots(list_images: list[np.ndarray], n_cols: int = 4, contours = None, only_contours = False) -> None:
     n_rows = len(list_images) // n_cols
     
     # Create a combined image for display
@@ -81,7 +81,7 @@ def main():
     for file in list_files:
         img = cv2.imread(str(file))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = trim_image(img,60)
+        img = image_trim(img,60)
         contour, _= cv2.findContours(img,cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         list_contours.append(contour)
         list_photos.append(img)
@@ -98,8 +98,8 @@ def main():
 
 
 
-    plot_subplots_images(list_photos,n_cols=3, contours=list_contours, only_contours=True)
-    plot_subplots_images(list_photos,n_cols=3, contours=list_contours)
+    image_plot_subplots(list_photos,n_cols=3, contours=list_contours, only_contours=True)
+    image_plot_subplots(list_photos,n_cols=3, contours=list_contours)
 
 
 if __name__ == "__main__":
