@@ -9,6 +9,100 @@ import argparse
 DEBUG=False
 DEBUG=True
 
+class Piece:
+    def __init__(self, piece_id, area, perimeter, bounding_rect, min_area_rect, box_points, hull, solidity, aspect_ratio, extent, contour):
+        self.piece_id = piece_id
+        self.area = area
+        self.perimeter = perimeter
+        self.bounding_rect = bounding_rect
+        self.min_area_rect = min_area_rect
+        self.box_points = box_points
+        self.hull = hull
+        self.solidity = solidity
+        self.aspect_ratio = aspect_ratio
+        self.extent = extent
+        self.contour = contour
+
+def extract_pieces_from_file(img_path, min_area=1000, plot=False):
+    """
+    Detect puzzle pieces in an image and return analysis results.
+    """
+    img_rgb = cv2.imread(str(img_path))
+    if img_rgb is None:
+        print(f"Could not read image: {img_path}")
+        return None
+
+    # --- Preprocessing with simple threshold ---
+    img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+    h, w = img_gray.shape[:2]
+    center_x, center_y = w // 2, h // 2
+    radius = 60
+    sz = int((radius / 100) * min(h, w))
+    half_sz = sz // 2
+    x1, y1, x2, y2 = max(0, center_x - half_sz), max(0, center_y - half_sz), min(w, center_x + half_sz), min(h, center_y + half_sz)
+    img_trimmed = img_gray[y1:y2, x1:x2]
+
+    _, thresh_fixed = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY)
+    _, thresh_otsu = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # --- Contour extraction ---
+    def get_valid_contours(thresh, min_area):
+        contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        return [c for c in contours if cv2.contourArea(c) > min_area]
+
+    contours_otsu = get_valid_contours(thresh_otsu, min_area)
+    contours_fixed = get_valid_contours(thresh_fixed, min_area)
+
+    if len(contours_otsu) >= len(contours_fixed):
+        contours, threshold_method = contours_otsu, "otsu"
+    else:
+        contours, threshold_method = contours_fixed, "fixed"
+
+    if len(contours) < 5:  # fallback with smaller thresholds
+        for min_area_try in [500, 200]:
+            contours_otsu = get_valid_contours(thresh_otsu, min_area_try)
+            contours_fixed = get_valid_contours(thresh_fixed, min_area_try)
+            if len(contours_otsu) >= len(contours_fixed):
+                contours = contours_otsu
+            else:
+                contours = contours_fixed
+            if len(contours) >= 5:
+                break
+
+    # --- Analyze contours ---
+    pieces = []
+    for i, contour in enumerate(contours):
+        area = cv2.contourArea(contour)
+        if area > 500000:  # filter out very large regions
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        x, y, w, h = cv2.boundingRect(contour)
+        rect = cv2.minAreaRect(contour)
+        box = np.int8(cv2.boxPoints(rect))
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        pieces.append(Piece(
+            'piece_id': i,
+            'area': area,
+            'perimeter': perimeter,
+            'bounding_rect': (x, y, w, h),
+            'min_area_rect': rect,
+            'box_points': box.tolist(),
+            'hull': hull.tolist(),
+            'solidity': float(area / hull_area) if hull_area > 0 else 0,
+            'aspect_ratio': float(w / h) if h > 0 else 0,
+            'extent': float(area / (w * h)) if w * h > 0 else 0,
+            'contour': contour.tolist()
+        })
+
+    return {
+        'image_path': str(img_path),
+        'num_pieces': len(pieces),
+        'pieces': pieces,
+        'method_used': 'simple_threshold',
+        'threshold_method': threshold_method
+    }
+
 class PiecesExtractor:
     def __init__(self, data_folder="data"):
         self.data_folder = Path(data_folder)
@@ -169,119 +263,79 @@ class PiecesExtractor:
     
     def detect_puzzle_pieces(self, img_path):
         """
-        Main function to detect puzzle pieces in an image
+        Detect puzzle pieces using the provided functional implementation.
         """
-        # Read image
-        img_rgb = cv2.imread(str(img_path))
-        if img_rgb is None:
-            print(f"Could not read image: {img_path}")
-            return None
-        
-        ## Resize if too large
-        #h, w = img_rgb.shape[:2]
-        #if max(h, w) > 2000:
-        #    scale = 2000 / max(h, w)
-        #    new_w, new_h = int(w * scale), int(h * scale)
-        #    img_rgb = cv2.resize(img_rgb, (new_w, new_h))
-        
-        # Use only simple threshold method
-        processed = self.preprocess_with_simple_threshold(img_rgb)
-        method_used = 'simple_threshold'
-        
-        # Use dual threshold approach for better edge extraction
-        contours, threshold_method = self._find_contours_with_dual_threshold(processed, min_area=1000)
-        print(f"Using {threshold_method} threshold for contour detection")
-
-        # If too few contours found, try with smaller area threshold
-        if len(contours) < 5:
-            print(f"Only {len(contours)} contours found, trying with smaller area threshold...")
-            contours, threshold_method = self._find_contours_with_dual_threshold(processed, min_area=500)
-            if len(contours) < 5:
-                contours, threshold_method = self._find_contours_with_dual_threshold(processed, min_area=200)
-        
-        print(f"Using {method_used} method - found {len(contours)} contours")
-        
-        # Analyze each contour
-        pieces = []
-        for i, contour in enumerate(contours):
-            analysis = self.analyze_contour(contour)
-            analysis['piece_id'] = i
-            pieces.append(analysis)
-
-        for p in pieces:
-            if p['area'] > 500000:
-                pieces.remove(p)
-        
-        return {
-            'image_path': str(img_path),
-            'processed_images': processed,
-            'contours': contours,
-            'pieces': pieces,
-            'num_pieces': len(pieces),
-            'method_used': method_used
-        }
+        return extract_pieces_from_file(img_path, min_area=1000)
     
     def visualize_results(self, results, save_path=None):
         """
-        Visualize the detection results
+        Visualize detection results. Recomputes processed images and contours for display.
         """
         if results is None:
             return
-        
-        processed = results['processed_images']
-        contours = results['contours']
+
+        # Recompute processed images and contours
+        img_rgb = cv2.imread(str(results['image_path']))
+        if img_rgb is None:
+            return
+
+        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        img_trimmed = self.image_trim(img_gray, radius=60)
+
+        _, thresh_fixed = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY)
+        _, thresh_otsu = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        processed = {
+            'thresh_otsu': thresh_otsu,
+            'thresh_fixed': thresh_fixed,
+            'final': thresh_otsu,
+        }
+
+        contours, _ = self._find_contours_with_dual_threshold(processed, min_area=1000)
         pieces = results['pieces']
-        
+
         # Create figure with subplots
         fig, axes = plt.subplots(2, 4, figsize=(20, 10))
         fig.suptitle(f'Puzzle Piece Detection Results - {Path(results["image_path"]).name}', fontsize=16)
-        
-        # OTSU Threshold
-        axes[0, 1].imshow(processed['thresh_otsu'])
+
+        axes[0, 1].imshow(processed['thresh_otsu'], cmap='gray')
         axes[0, 1].set_title('OTSU Threshold')
         axes[0, 1].axis('off')
-        
-        # Fixed Threshold
-        axes[0, 2].imshow(processed['thresh_fixed'])
+
+        axes[0, 2].imshow(processed['thresh_fixed'], cmap='gray')
         axes[0, 2].set_title('Fixed Threshold (110)')
         axes[0, 2].axis('off')
-        
-        # Final processed (OTSU)
-        axes[0, 3].imshow(processed['final'])
+
+        axes[0, 3].imshow(processed['final'], cmap='gray')
         axes[0, 3].set_title('Final Processed (OTSU)')
         axes[0, 3].axis('off')
-        
-        # Contours 
-        img_with_contours = processed['final'].copy()
+
+        img_with_contours = cv2.cvtColor(processed['final'], cv2.COLOR_GRAY2BGR)
         cv2.drawContours(img_with_contours, contours, -1, (0, 255, 0), 2)
         axes[1, 0].imshow(cv2.cvtColor(img_with_contours, cv2.COLOR_BGR2RGB))
         axes[1, 0].set_title(f'Contours ({len(contours)} found)')
         axes[1, 0].axis('off')
-        
-        # Individual pieces
+
         if pieces:
-            # Show first few pieces
             num_to_show = min(3, len(pieces))
             for i in range(num_to_show):
                 piece = pieces[i]
                 x, y, w, h = piece['bounding_rect']
-                
-                # Extract piece region
+
                 piece_img = processed['final'][y:y+h, x:x+w]
-                
-                # Draw bounding rectangle
+                piece_img = cv2.cvtColor(piece_img, cv2.COLOR_GRAY2BGR)
                 cv2.rectangle(piece_img, (0, 0), (w-1, h-1), (0, 255, 0), 2)
-                
+
                 axes[1, i+1].imshow(cv2.cvtColor(piece_img, cv2.COLOR_BGR2RGB))
                 axes[1, i+1].set_title(f'Piece {i+1}\nArea: {piece["area"]:.0f}')
                 axes[1, i+1].axis('off')
-        
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Visualization saved to: {save_path}")
-        
+
         plt.show()
     
     def save_results(self, results, output_name=None):
@@ -308,7 +362,7 @@ class PiecesExtractor:
                 'solidity': float(piece['solidity']),
                 'aspect_ratio': float(piece['aspect_ratio']),
                 'extent': float(piece['extent']),
-                'contour_points': piece['contour'].tolist()
+                'contour_points': piece['contour'] if isinstance(piece['contour'], list) else piece['contour'].tolist()
             }
             json_data['pieces'].append(piece_data)
         
@@ -384,23 +438,15 @@ def main():
     
     args = parser.parse_args()
     
-    detector = PiecesExtractor(args.data_folder)
+    img_path = Path(args.image)
     
-    if args.image:
-        # Process specific image
-        img_path = Path(args.image)
-        if not img_path.exists():
-            print(f"Image not found: {img_path}")
-            return
-        
-        results = detector.detect_puzzle_pieces(img_path)
-        if not results:
-            print(f"No results found for {img_path}")
-            return
+    for img_path in Path(args.data_folder).glob("*.JPG"):
+        results = extract_pieces_from_file(img_path)
 
-        detector.save_results(results)
-        if not args.no_viz:
-            detector.visualize_results(results)
+
+    detector.save_results(results)
+    if not args.no_viz:
+        detector.visualize_results(results)
         
 
         
