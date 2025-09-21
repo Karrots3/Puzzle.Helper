@@ -81,19 +81,22 @@ def extract_pieces_from_file(img_path, min_area=1000, plot=False):
         box = np.int8(cv2.boxPoints(rect))
         hull = cv2.convexHull(contour)
         hull_area = cv2.contourArea(hull)
+        if hull_area > 500000:
+            continue
         pieces.append(Piece(
-            'piece_id': i,
-            'area': area,
-            'perimeter': perimeter,
-            'bounding_rect': (x, y, w, h),
-            'min_area_rect': rect,
-            'box_points': box.tolist(),
-            'hull': hull.tolist(),
-            'solidity': float(area / hull_area) if hull_area > 0 else 0,
-            'aspect_ratio': float(w / h) if h > 0 else 0,
-            'extent': float(area / (w * h)) if w * h > 0 else 0,
-            'contour': contour.tolist()
-        })
+            piece_id=i,
+            area=area,
+            perimeter=perimeter,
+            bounding_rect=(x, y, w, h),
+            min_area_rect=rect,
+            box_points=box,
+            hull=hull,
+            solidity=float(area / hull_area) if hull_area > 0 else 0,
+            aspect_ratio=float(w / h) if h > 0 else 0,
+            extent=float(area / (w * h)) if w * h > 0 else 0,
+            contour=contour.tolist()
+        ))
+
 
     return {
         'image_path': str(img_path),
@@ -438,23 +441,18 @@ def main():
     
     args = parser.parse_args()
     
-    img_path = Path(args.image)
+    #img_path = Path(args.image)
+    img_path = "data/Puzzle"
     
+    list_pieces = []
     for img_path in Path(args.data_folder).glob("*.JPG"):
-        results = extract_pieces_from_file(img_path)
+        pieces = extract_pieces_from_file(img_path)
+        if len(pieces) == 1:
+            list_pieces.append(pieces[0])
+        else:
+            print(f"Found {len(pieces)} pieces in {img_path}")
 
 
-    detector.save_results(results)
-    if not args.no_viz:
-        detector.visualize_results(results)
-        
-
-        
-        
-
-    else:
-        # Process all images
-        detector.process_all_images()
 
 if __name__ == "__main__":
     main()
