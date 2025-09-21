@@ -701,10 +701,10 @@ def score_edge_match(contour1, contour2, sign1, sign2, do_complementary: bool = 
             #if area_score > 0.2:
             #    area_score = float('inf')
             #else:
-            total_score = (geometric_score * 0.5 +           # Primary: best geometric match
-                          sliding_score * 0.2 +              # Secondary: sliding window robustness  
-                          curvature_score * 0.2 +            # Shape complementarity
-                          endpoint_penalty * 0.1)            # Endpoint consistency
+                total_score = (geometric_score * 0.5 +           # Primary: best geometric match
+                              sliding_score * 0.2 +              # Secondary: sliding window robustness  
+                              curvature_score * 0.2 +            # Shape complementarity
+                              endpoint_penalty * 0.1)            # Endpoint consistency
             
             #print(f"flip1: {flip1}, flip2: {flip2}, total_score: {total_score}, correlation: {curvature_score}, endpoint_penalty: {endpoint_penalty}")
             if total_score < best_score:

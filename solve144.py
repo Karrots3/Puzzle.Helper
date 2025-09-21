@@ -63,6 +63,77 @@ def sub_contour(c, idx0, idx1):
     else:
         return np.concatenate([c[idx0:], c[:idx1]])
 
+def normalize_edge(contour, idx0, idx1, center):
+    """
+    Normalize an edge by rotating and transforming it without warping the image.
+    
+    Args:
+        contour: The piece contour as numpy array
+        idx0: Start index of the edge in the contour
+        idx1: End index of the edge in the contour  
+        center: Center point of the piece
+        
+    Returns:
+        dict: Contains normalized contour, center, angle, sign, and straight length
+    """
+    # Get the start and end points of the edge
+    p0 = contour[idx0][0]
+    p1 = contour[idx1][0]
+    
+    # Calculate the direction vector and straight length
+    dx, dy = p1 - p0
+    straight_length = math.sqrt(dx**2 + dy**2)
+    
+    # Calculate the angle to rotate the edge to horizontal
+    angle_degrees = math.degrees(math.atan2(dy, dx))
+    
+    # Create transform to normalize: first point at (0, 0), last point at (X, 0)
+    transform = get_contour_transform(contour, idx0, 0, 0, angle_degrees)
+    
+    # Apply transform to the entire piece contour
+    normalized_piece_contour = transform_contour(contour, transform)
+    
+    # Extract just the edge contour
+    normalized_edge_contour = sub_contour(normalized_piece_contour, idx0, idx1 + 1)
+    
+    # Transform the piece center
+    normalized_piece_center = transform_point(center, transform)
+    
+    # Compute the sign of the edge (male/female/flat)
+    heights = normalized_edge_contour[:, 0, 1]
+    if np.max(np.abs(heights)) > 10:
+        sign = 1 if np.max(heights) > -np.min(heights) else -1
+    else:
+        sign = 0
+    
+    # For male contours (sign == 1), rotate by 180° for easier matching with female contours
+    if sign == 1:
+        angle_degrees += 180
+        transform = get_contour_transform(contour, idx1, 0, 0, angle_degrees)
+        normalized_piece_contour = transform_contour(contour, transform)
+        normalized_piece_center = transform_point(center, transform)
+    
+    return {
+        'normalized_piece_contour': normalized_piece_contour,
+        'normalized_piece_center': normalized_piece_center,
+        'angle_degrees': angle_degrees,
+        'sign': sign,
+        'straight_length': straight_length,
+        'idx0': idx0,
+        'idx1': idx1
+    }
+
+# Example usage:
+# normalized_edge_data = normalize_edge(piece.contour, edge_start_idx, edge_end_idx, piece.center)
+# 
+# The function returns a dictionary with:
+# - 'normalized_piece_contour': The entire piece contour after normalization
+# - 'normalized_piece_center': The piece center after normalization  
+# - 'angle_degrees': The rotation angle applied
+# - 'sign': Edge type (1=male, -1=female, 0=flat)
+# - 'straight_length': The straight-line distance between edge endpoints
+# - 'idx0', 'idx1': Original edge indices
+
 """# Detect pieces"""
 
 def segment_colored_puzzle(img_rgb):
@@ -268,7 +339,7 @@ for piece in pieces:
     peak_indices.sort()
     piece.update(center=np.array([cx, cy]),
                  peak_indices=LoopingList(peak_indices),
-                 )
+     )
 
 # Show the pieces having the smallest / highest number of peak indices
 pieces.sort(key= lambda piece: len(piece.peak_indices))
@@ -320,6 +391,7 @@ for piece in pieces:
 ## Extract edges
 """
 
+
 for piece in pieces:
     edges = LoopingList()
     for quarter in range(4):
@@ -332,6 +404,7 @@ for piece in pieces:
         straight_length=math.sqrt(dx**2 + dy**2)
         angle_degrees = math.degrees(math.atan2(dy, dx))
 
+# HERE 
         transform = get_contour_transform(piece.contour, idx0, 0, 0, angle_degrees)
         normalized_piece_contour = transform_contour(piece.contour, transform)
         normalized_edge_contour = sub_contour(normalized_piece_contour, idx0, idx1 + 1)
