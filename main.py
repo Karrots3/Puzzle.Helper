@@ -7,52 +7,7 @@ import logging
 from pathlib import Path
 import cv2
 import numpy as np
-from scipy.signal import find_peaks
-import itertools
-import math
-from matplotlib import pyplot as plt
 
-# TYPE_OF_IMG = 
-
-class LoopingList(list):
-    def __getitem__(self, i):
-        if isinstance(i, int):
-            return super().__getitem__(i % len(self))
-        else:
-            return super().__getitem__(i)
-
-class Edge():
-    def __init__(self, contour: np.ndarray, sign: int):
-        self.contour = contour
-        self.sign = sign
-        self.color = "blue" if sign == 1 else "red" if sign == -1 else "green"
-        
-class Image():
-    def __init__(self, 
-                 img_id: int,
-                 img: np.ndarray, 
-                 contour: np.ndarray,
-                 peaks_idx: list[int],
-                 peaks: np.ndarray,
-                 edges: list[np.ndarray],
-                 edges_norm: list[Edge]
-                 ):
-        super().__init__()  # Initialize the parent list class
-        self.img_id = img_id
-        self.name = f"{img_id:04d}"
-        self.img = img
-        self.contour = contour
-        self.peaks_idx = peaks_idx
-        self.peaks = peaks
-        self.edges = edges
-        self.edges_norm = edges_norm
-    
-    def __str__(self):
-        return f"Image(name={self.name}, shape={self.img.shape}, peaks={len(self.peaks_idx)}, edges={len(self.edges)})"
-    
-    def __repr__(self):
-        return self.__str__()
-        
 
 def trim_image(img: np.ndarray, radius: int = 100) -> np.ndarray:
     h, w = img.shape[:2]
