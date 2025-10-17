@@ -1,0 +1,37 @@
+#####################################################################
+Image: data/puzzle/P1100804.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1100804.JPG
+#####################################################################
+Image: data/puzzle/P1100830.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1100830.JPG
+#####################################################################
+Image: data/puzzle/P1110089.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1110089.JPG
+#####################################################################
+Image: data/puzzle/P1110091.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1110091.JPG
+#####################################################################
+Image: data/puzzle/P1110023.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1110023.JPG
+#####################################################################
+Image: data/puzzle/P1110221.JPG
+num pieces otsu: 0
+num pieces fixed: 0
+No pieces found!
+Image: data/puzzle/P1110221.JPG
+

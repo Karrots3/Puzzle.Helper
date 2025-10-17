@@ -1,122 +1,30 @@
 import argparse
+import pickle
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 
+from classes import Piece
+from myutils import get_pieceId, plot_list_images
+
 DEBUG = False
-DEBUG = True
-
-list_pieces = {}
-list_images_pieces = {}
-
-# ------------------------------------------------------------------------------
-# --- Classes ---
-# ------------------------------------------------------------------------------
 
 
-class Edge:
-    def __init__(self, edge_id, contour, length, approx, edge_type):
-        self.edge_id = edge_id
-        self.contour = contour
-        self.length = length
-        self.approx = approx
-        self.edge_type = edge_type
-
-
-class Piece:
-    def __init__(
-        self,
-        piece_id,
-        img_thresh,
-        contour,
-        area,
-        perimeter,
-        bounding_rect,
-        min_area_rect,
-        box_points,
-        hull,
-        solidity,
-        aspect_ratio,
-        extent,
-        edge_list: list[Edge] = [],
-    ):
-        self.piece_id = piece_id
-        self.img_thresh = img_thresh
-        self.contour = contour
-        self.area = area
-        self.perimeter = perimeter
-        self.bounding_rect = bounding_rect
-        self.min_area_rect = min_area_rect
-        self.box_points = box_points
-        self.hull = hull
-        self.solidity = solidity
-        self.aspect_ratio = aspect_ratio
-        self.extent = extent
-        self.edge_list: list[Edge] = edge_list
-
-
-# ------------------------------------------------------------------------------
-# --- Visualization ------------------------------------------------------------
-# ------------------------------------------------------------------------------
-
-
-def plot_list_images_pipeline(
-    list_images, suptitle="Image Processing Pipeline", path_save: Path | None = None
-):
-    """
-    Plot a list of images in a grid layout with at most 4 columns.
-    """
-    num_images = len(list_images)
-    cols = 3
-    rows = (num_images + cols - 1) // cols
-
-    fig, axes = plt.subplots(rows, cols, figsize=(15, 5 * rows))
-    fig.suptitle(suptitle, fontsize=16, fontweight="bold")
-    axes = axes.flatten()
-
-    for i, (title, img) in enumerate(list_images.items()):
-        if i < len(axes):
-            if len(img.shape) == 2:  # Grayscale
-                axes[i].imshow(img, cmap="gray")
-            else:  # Color
-                axes[i].imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            axes[i].set_title(title, fontsize=12, fontweight="bold")
-            axes[i].axis("off")
-
-    # Hide unused subplots
-    for i in range(len(list_images), len(axes)):
-        axes[i].axis("off")
-
-    plt.tight_layout()
-    if path_save:
-        plt.savefig(path_save, dpi=300, bbox_inches="tight")
-    else:
-        plt.show()
-
-
-# ------------------------------------------------------------------------------
-# --- Functions ---
-# ------------------------------------------------------------------------------
-
-
-def index2grid(index, n_cols=10, start=0):
-    """
-    Convert a linear index to a grid position (row, col).
-    """
-    row = (index - start) // n_cols
-    col = (index - start) % n_cols
-    return row, col
-
-
-def extract_pieces_from_file(
-    img_path, img_index, min_area=1000, method="otsu"
+def detectPieceFromImagine(
+    img_path, img_index, method, path_plot_imagine_pipeline: Path
 ) -> Piece | None:
     """
     Detect puzzle pieces in an image and return analysis results.
     """
-    list_images_pipeline = {}
+    assert method in ["otsu", "fixed"], "Method must be 'otsu' or 'fixed'"
+    assert (
+        path_plot_imagine_pipeline is not None
+    ), "path_plot_imagine_pipeline must be provided"
+    list_images_pipeline = {}  # visualization steps
+
+    # --- Load image ---
     img_rgb = cv2.imread(str(img_path))
     if img_rgb is None:
         print(f"Could not read image: {img_path}")
@@ -169,12 +77,8 @@ def extract_pieces_from_file(
         hull = cv2.convexHull(contour)
         hull_area = cv2.contourArea(hull)
 
-        # Create coordinate-based piece_id
-        row, col = index2grid(piece_index, 10, 0)
-        piece_id = f"{row}_{col}_{piece_index}"
-
         return Piece(
-            piece_id=piece_id,
+            piece_id=get_pieceId(piece_index),
             img_thresh=img_thresh_fixed,
             contour=contour,
             area=area,
@@ -191,9 +95,7 @@ def extract_pieces_from_file(
     pieces_otsu = [contour2piece(c, img_index) for c in contours_otsu]
     pieces_fixed = [contour2piece(c, img_index) for c in contours_fixed]
 
-    def filter_pieces(
-        pieces, min_perimeter=200, max_perimeter=7500, min_area=150000, max_area=700000
-    ):
+    def filter_pieces(pieces, min_perimeter, max_perimeter, min_area, max_area):
         return [
             p
             for p in pieces
@@ -212,9 +114,11 @@ def extract_pieces_from_file(
     img_otsu_full_contours = cv2.cvtColor(img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
     img_fixed_full_contours = cv2.cvtColor(img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR)
 
-    print("#####################################################################")
-    print(f"num pieces otsu: {len(pieces_otsu)}")
-    print(f"num pieces fixed: {len(pieces_fixed)}")
+    if len(pieces_otsu) == 0 and len(pieces_fixed) == 0:
+        print("#####################################################################")
+        print(f"Image: {img_path}")
+        print(f"num pieces otsu: {len(pieces_otsu)}")
+        print(f"num pieces fixed: {len(pieces_fixed)}")
     full_pieces_fixed = pieces_fixed.copy()
     full_pieces_otsu = pieces_otsu.copy()
 
@@ -238,12 +142,13 @@ def extract_pieces_from_file(
         print(f"Image: {img_path}")
         return None
 
-    for p in pieces_fixed + pieces_otsu:
-        if p is None:
-            continue
-        print(
-            f"Piece {p.piece_id}: Area={p.area}, Perimeter={p.perimeter}, BoundingRect={p.bounding_rect}, Solidity={p.solidity:.2f}, AspectRatio={p.aspect_ratio:.2f}, Extent={p.extent:.2f}"
-        )
+    if DEBUG:
+        for p in pieces_fixed + pieces_otsu:
+            if p is None:
+                continue
+            print(
+                f"Piece {p.piece_id}: Area={p.area}, Perimeter={p.perimeter}, BoundingRect={p.bounding_rect}, Solidity={p.solidity:.2f}, AspectRatio={p.aspect_ratio:.2f}, Extent={p.extent:.2f}"
+            )
 
     img_otsu_contours = cv2.cvtColor(img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
     img_fixed_contours = cv2.cvtColor(img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR)
@@ -258,28 +163,32 @@ def extract_pieces_from_file(
             continue
         cv2.drawContours(img_otsu_contours, [p.contour], -1, (0, 255, 0), 2)
 
+    # visualizations steps
     list_images_pipeline[f"03-contours-otsu--{len(contours_otsu)}"] = img_otsu_contours
     list_images_pipeline[f"04-contours-fixed--{len(contours_fixed)}"] = (
         img_fixed_contours
     )
-    # plot_list_images_pipeline(
-    #     list_images_pipeline, path_save=f"results/pieces_img/{img_path.name}.png"
-    # )
-
-    # list_images_pieces[img_path.name] = img_otsu_contours
 
     if method == "otsu" and len(pieces_otsu) > 0:
         assert type(pieces_otsu[0]) == Piece
-        return pieces_otsu[0]
+        final_piece:Piece = pieces_otsu[0]
     elif method == "fixed" and len(pieces_fixed) > 0:
         assert type(pieces_fixed[0]) == Piece
-        return pieces_fixed[0]
+        final_piece:Piece = pieces_fixed[0]
+    else:
+        final_piece:Piece = (pieces_fixed + pieces_otsu)[0]
 
     assert (
         type((pieces_fixed + pieces_otsu)[0]) == Piece
         or type((pieces_fixed + pieces_otsu)[0]) == None
     )
-    return (pieces_fixed + pieces_otsu)[0]
+
+    plot_list_images(
+        list_images_pipeline,
+        path_save=path_plot_imagine_pipeline / f"{final_piece.piece_id}.png",
+    )
+
+    return final_piece
 
     # if len(contours_otsu) >= len(contours_fixed):
     #     contours, threshold_method = contours_otsu, "otsu"
@@ -326,56 +235,54 @@ def extract_pieces_from_file(
     # return pieces[0]
 
 
-def main():
+if __name__ == "__main__":
+    list_pieces = {}
+    list_images_pieces = {}
     # --- Paths ---
-    path_data_puzzle = Path("data/puzzle")
-    path_res_pieces = Path("results/pieces")
-    # --- End Paths ---
+    Path_org_images = Path("data")  # sure matches
+    Path_org_images = Path("data/puzzle")
+    Path_out_pieces = Path("results/01_pieces")
+    Path_img_pieces_pipeline = Path("results/01_pieces_img")
 
+    for path in [Path_out_pieces, Path_img_pieces_pipeline]:
+        path.mkdir(parents=True, exist_ok=True)
+
+    # --- Parse arguments ---
     parser = argparse.ArgumentParser(description="Detect puzzle pieces in images")
     parser.add_argument(
-        "--data-folder", default=path_data_puzzle, help="Folder containing images"
+        "--data-folder", default=Path_org_images, help="Folder containing images"
     )
     parser.add_argument(
-        "--output-folder", default=path_res_pieces, help="Folder to save results"
+        "--output-folder", default=Path_out_pieces, help="Folder to save results"
+    )
+    parser.add_argument(
+        "--output-img-folder",
+        default=Path_img_pieces_pipeline,
+        help="Folder to save images",
     )
     parser.add_argument("--image", help="Specific image to process (optional)")
     parser.add_argument("--no-viz", action="store_true", help="Skip visualization")
     args = parser.parse_args()
 
-    from multiprocessing import Pool
-
-    # Get sorted list of image paths to maintain creation order
+    # --- Get sorted list of image paths to maintain creation order ---
     image_paths = sorted(args.data_folder.glob("*.JPG"))
 
-    with Pool() as pool:
-        # Create arguments with image index for coordinate system
-        args_with_index = [(img_path, i) for i, img_path in enumerate(image_paths)]
+    # --- Detect pieces ---
+    with Pool(cpu_count()) as pool:
+        # --- Create arguments with image index for coordinate system ---
+        args_with_index = [
+            (img_path, i, "otsu", args.output_img_folder)
+            for i, img_path in enumerate(image_paths)
+        ]
         results: list[Piece | None] = pool.starmap(
-            extract_pieces_from_file, args_with_index
+            detectPieceFromImagine, args_with_index
         )
 
-    # Create dictionary with coordinate-based keys
-    # list_pieces = {p.piece_id: p for p in results}
-    with open(args.output_folder / "missing_pieces.txt", "w") as f:
-        list_pieces = {}
-        for p in results:
-            if p is None:
-                continue
-            if type(p) == list:
-                p = p[0]
-            print("p", p)
-            print("p.piece_id", p.piece_id)
-            list_pieces[p.piece_id] = p
+    dict_pieces: dict[str, Piece] = {}
+    for p in results:
+        if p is None:
+            continue
+        dict_pieces[p.piece_id] = p
 
-    # save list pieces
-    import pickle
-
-    with open(args.output_folder / "list_pieces.pkl", "wb") as f:
-        pickle.dump(list_pieces, f)
-
-    # plot_list_images_pipeline(list_images_pieces)
-
-
-if __name__ == "__main__":
-    main()
+    with open(args.output_folder / "dict_pieces.pkl", "wb") as f:
+        pickle.dump(dict_pieces, f)
