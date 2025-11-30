@@ -1,6 +1,0 @@
-data/puzzle/P1100804.JPG , non centered
-data/puzzle/P1100830.JPG , non centered
-data/puzzle/P1110023.JPG , non centered
-data/puzzle/P1110089.JPG , non centered
-data/puzzle/P1110091.JPG , non centered
-data/puzzle/P1110221.JPG

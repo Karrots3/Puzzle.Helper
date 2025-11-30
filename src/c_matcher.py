@@ -5,9 +5,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from classes import (FLAT_EDGE, MAX_SCORE_MSE_DISTANCE, MIN_LEN_EDGE,
-                     SAMPLE_POINTS, Edge, Piece)
-from myutils import plot_list_images
+from src.classes import (MAX_SCORE_MSE_DISTANCE, MIN_LEN_EDGE, SAMPLE_POINTS,
+                         Edge, EdgeType, Piece)
+from src.myutils import plot_list_images
 
 
 class MatchData:
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     for ip1, piece1 in enumerate(dict_pieces.values()):
         print(f"Processing piece {ip1}...")
         for ie1, edge1 in enumerate(piece1.edge_list):
-            if edge1.edge_type == FLAT_EDGE:
+            if edge1.edge_type == EdgeType.FLAT:
                 continue
             if not check_len(edge1):
                 print(

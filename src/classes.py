@@ -1,58 +1,78 @@
-MIN_AREA_PIECE = 100
-MAX_AREA_PIECE = 7000
-MIN_PERIMETER_PIECE = 20
-MAX_PERIMETER_PIECE = 8000
+from enum import Enum
 
-MIN_LEN_EDGE = 500
-SAMPLE_POINTS = 1000
-MAX_SCORE_MSE_DISTANCE = 20
+import numpy as np
 
-FLAT_EDGE = 0
-MALE_EDGE = 1
-FEMALE_EDGE = -1
-COLORS_GENDER = {FLAT_EDGE: "red", MALE_EDGE: "green", FEMALE_EDGE: "blue"}
+
+class EdgeType(Enum):
+    flat = 0
+    man = 1
+    woman = -1
+
+
+class EdgeColor(Enum):
+    flat = (0, 255, 0)
+    man = (0, 0, 255)
+    woman = (255, 0, 0)
 
 
 class Edge:
-    def __init__(self, edge_id, contour, norm_contour, length, approx, edge_type):
+    def __init__(
+        self,
+        edge_id: int,
+        edge_type: str,
+        edge_color: tuple[int, int, int],
+        edge_contour: np.ndarray,
+    ):
         self.edge_id = edge_id
-        self.contour = contour
-        self.normalized_contour = norm_contour
-        self.straight_length = length
-        self.approx = approx
         self.edge_type = edge_type
+        self.edge_color = edge_color
+        self.edge_contour = edge_contour
 
 
 class Piece:
     def __init__(
         self,
-        piece_id,
-        img_thresh,
-        contour,
-        area,
-        perimeter,
-        bounding_rect,
-        min_area_rect,
-        box_points,
-        hull,
-        solidity,
-        aspect_ratio,
-        extent,
-        edge_list: list[Edge] = [],
+        piece_id: int,
+        rgb_img: np.ndarray,
+        contour: np.ndarray,
+        edge_list: list[Edge],
     ):
         self.piece_id = piece_id
-        self.img_thresh = img_thresh
+        self.rgb_img = rgb_img
         self.contour = contour
-        self.area = area
-        self.perimeter = perimeter
-        self.bounding_rect = bounding_rect
-        self.min_area_rect = min_area_rect
-        self.box_points = box_points
-        self.hull = hull
-        self.solidity = solidity
-        self.aspect_ratio = aspect_ratio
-        self.extent = extent
-        self.edge_list: list[Edge] = edge_list
+        self.edge_list = edge_list
+
+
+class PipelineProcessImgParams:
+    def __init__(
+        self,
+        radius: float = 0.6,
+        shift_x: float = 1.1,
+        shift_y: float = 0.86,
+        thresh: int = 110,
+        min_area=20,
+        max_area=10000,
+        max_value=255,
+        min_perimeter=100,
+        max_perimeter=1000,
+        prominence=10500,
+        flat_threshold=20,
+        diff_length=0.01,
+    ):
+        self.crop_radius = radius
+        self.crop_shift_x = shift_x
+        self.crop_shift_y = shift_y
+        self.th_thresh = thresh
+        self.th_maxvalue = max_value
+        self.filter_contour_min_area = min_area
+        self.filter_contour_max_area = max_area
+        self.filter_contour_min_perimeter = min_perimeter
+        self.filter_contour_max_perimeter = max_perimeter
+        self.edges_peaks_prominence = prominence
+        self.edge_type = EdgeType
+        self.edge_color = EdgeColor
+        self.flat_threshold = flat_threshold
+        self.max_diff_length = diff_length
 
 
 class LoopingList(list):

@@ -5,11 +5,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from matplotlib import pyplot as plt
 
-from classes import Piece
-from myutils import get_pieceId, plot_list_images
-
-DEBUG = False
+from src.classes import DEBUG, Piece
+from src.myutils import get_pieceId, plot_list_images
 
 
 def detectPieceFromImagine(
@@ -25,17 +24,15 @@ def detectPieceFromImagine(
     list_images_pipeline = {}  # visualization steps
 
     # --- Load image ---
-    img_rgb = cv2.imread(str(img_path))
-    if img_rgb is None:
-        print(f"Could not read image: {img_path}")
-        return None
+    assert img_path.exists(), f"Image path {img_path} does not exist"
+    cv2_img_rgb = cv2.imread(str(img_path))
 
-    list_images_pipeline["00-original"] = img_rgb
+    # list_images_pipeline["00-original"] = img_rgb
 
     # --- Preprocessing with simple threshold ---
-    def _trim_thresh(img_rgb):
-        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-        h, w = img_gray.shape[:2]
+    def _trim_thresh(cv2_img_rgb) -> tuple[np.ndarray, np.ndarray]:
+        cv2_img_gray = cv2.cvtColor(cv2_img_rgb, cv2.COLOR_BGR2GRAY)
+        h, w = cv2_img_gray.shape[:2]
         center_x, center_y = w // 2, h // 2
         radius = 60
         sz = int((radius / 100) * min(h, w))
@@ -46,27 +43,33 @@ def detectPieceFromImagine(
             min(w, center_x + half_sz),
             min(h, center_y + half_sz),
         )
-        img_trimmed = img_gray[y1:y2, x1:x2]
-        list_images_pipeline["01-grey-trimmed"] = img_trimmed
+        img_trimmed = cv2_img_gray[y1:y2, x1:x2]
+        # list_images_pipeline["01-grey-trimmed"] = img_trimmed
 
-        _, img_thresh_fixed = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY)
-        _, img_thresh_otsu = cv2.threshold(
+        _, bw_img_thresh_fixed = cv2.threshold(img_trimmed, 110, 255, cv2.THRESH_BINARY)
+        _, bw_img_thresh_otsu = cv2.threshold(
             img_trimmed, 110, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
-        return img_thresh_fixed, img_thresh_otsu
+        return bw_img_thresh_fixed, bw_img_thresh_otsu
 
-    img_thresh_fixed, img_thresh_otsu = _trim_thresh(img_rgb)
+    bw_img_thresh_fixed, bw_img_thresh_otsu = _trim_thresh(cv2_img_rgb)
 
-    list_images_pipeline["02-thresh-fixed"] = img_thresh_fixed
-    list_images_pipeline["02-thresh-otsu"] = img_thresh_otsu
+    # list_images_pipeline["02-thresh-fixed"] = img_thresh_fixed
+    # list_images_pipeline["02-thresh-otsu"] = img_thresh_otsu
+
+    # plot the image
+    plt.imshow(bw_img_thresh_fixed, cmap="gray")
+    plt.show()
 
     # --- Contour extraction ---
-    def get_valid_contours(img_thresh):
-        contours, _ = cv2.findContours(img_thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+    def get_valid_contours(bw_img_thresh) -> list[np.ndarray]:
+        contours, _ = cv2.findContours(
+            bw_img_thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE
+        )
         return contours
 
-    contours_otsu = get_valid_contours(img_thresh_otsu)
-    contours_fixed = get_valid_contours(img_thresh_fixed)
+    cv2_contours_otsu = get_valid_contours(bw_img_thresh_otsu)
+    cv2_contours_fixed = get_valid_contours(bw_img_thresh_fixed)
 
     def contour2piece(contour, piece_index) -> Piece | None:
         area = cv2.contourArea(contour)
@@ -79,7 +82,8 @@ def detectPieceFromImagine(
 
         return Piece(
             piece_id=get_pieceId(piece_index),
-            img_thresh=img_thresh_fixed,
+            bw_thresh_fixed=bw_img_thresh_fixed,
+            bw_thresh_otsu=bw_img_thresh_otsu,
             contour=contour,
             area=area,
             perimeter=perimeter,
@@ -90,10 +94,11 @@ def detectPieceFromImagine(
             solidity=float(area / hull_area) if hull_area > 0 else 0,
             aspect_ratio=float(w / h) if h > 0 else 0,
             extent=float(area / (w * h)) if w * h > 0 else 0,
+            edge_list=[],
         )
 
-    pieces_otsu = [contour2piece(c, img_index) for c in contours_otsu]
-    pieces_fixed = [contour2piece(c, img_index) for c in contours_fixed]
+    pieces_otsu = [contour2piece(c, img_index) for c in cv2_contours_otsu]
+    pieces_fixed = [contour2piece(c, img_index) for c in cv2_contours_fixed]
 
     def filter_pieces(pieces, min_perimeter, max_perimeter, min_area, max_area):
         return [
@@ -111,8 +116,10 @@ def detectPieceFromImagine(
         pieces_fixed, min_perimeter=100, max_perimeter=8000, min_area=20, max_area=10000
     )
 
-    img_otsu_full_contours = cv2.cvtColor(img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
-    img_fixed_full_contours = cv2.cvtColor(img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR)
+    img_otsu_full_contours = cv2.cvtColor(bw_img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
+    img_fixed_full_contours = cv2.cvtColor(
+        bw_img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR
+    )
 
     if len(pieces_otsu) == 0 and len(pieces_fixed) == 0:
         print("#####################################################################")
@@ -150,8 +157,8 @@ def detectPieceFromImagine(
                 f"Piece {p.piece_id}: Area={p.area}, Perimeter={p.perimeter}, BoundingRect={p.bounding_rect}, Solidity={p.solidity:.2f}, AspectRatio={p.aspect_ratio:.2f}, Extent={p.extent:.2f}"
             )
 
-    img_otsu_contours = cv2.cvtColor(img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
-    img_fixed_contours = cv2.cvtColor(img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR)
+    img_otsu_contours = cv2.cvtColor(bw_img_thresh_otsu.copy(), cv2.COLOR_GRAY2BGR)
+    img_fixed_contours = cv2.cvtColor(bw_img_thresh_fixed.copy(), cv2.COLOR_GRAY2BGR)
 
     for p in pieces_fixed:
         if p is None:
@@ -164,19 +171,21 @@ def detectPieceFromImagine(
         cv2.drawContours(img_otsu_contours, [p.contour], -1, (0, 255, 0), 2)
 
     # visualizations steps
-    list_images_pipeline[f"03-contours-otsu--{len(contours_otsu)}"] = img_otsu_contours
-    list_images_pipeline[f"04-contours-fixed--{len(contours_fixed)}"] = (
+    list_images_pipeline[f"03-contours-otsu--{len(cv2_contours_otsu)}"] = (
+        img_otsu_contours
+    )
+    list_images_pipeline[f"04-contours-fixed--{len(cv2_contours_fixed)}"] = (
         img_fixed_contours
     )
 
     if method == "otsu" and len(pieces_otsu) > 0:
         assert type(pieces_otsu[0]) == Piece
-        final_piece:Piece = pieces_otsu[0]
+        final_piece: Piece = pieces_otsu[0]
     elif method == "fixed" and len(pieces_fixed) > 0:
         assert type(pieces_fixed[0]) == Piece
-        final_piece:Piece = pieces_fixed[0]
+        final_piece: Piece = pieces_fixed[0]
     else:
-        final_piece:Piece = (pieces_fixed + pieces_otsu)[0]
+        final_piece: Piece = (pieces_fixed + pieces_otsu)[0]
 
     assert (
         type((pieces_fixed + pieces_otsu)[0]) == Piece

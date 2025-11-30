@@ -13,17 +13,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import find_peaks
 
-from classes import COLORS_GENDER, FEMALE_EDGE, FLAT_EDGE, MALE_EDGE, Edge, LoopingList, Piece
-from myutils import plot_list_images
-
+from src.classes import Edge, EdgeColorType, EdgeType, LoopingList, Piece
+from src.myutils import plot_list_images
 
 PROMINENCE = 10500
+
 
 # TODO(matte): smarter prominence when is not found the correct number of peaks
 def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
     """
     Detect edges of a puzzle piece, classify them, and store in the Piece object.
     """
+    # Default paths for saving images (can be overridden if needed)
+    path_contour = "results/02_contour/"
+    path_edges = "results/02_edges/"
+    path_pipelines = "results/02_pipelines/"
+
     list_images_pipeline = {}
 
     # -------------------
@@ -54,7 +59,7 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
     peak_indices.sort()
 
     # plot all peaks over the image
-    img_contour = cv2.cvtColor(piece.img_thresh, cv2.COLOR_GRAY2BGR)
+    img_contour = cv2.cvtColor(piece.bw_thresh_fixed, cv2.COLOR_GRAY2BGR)
     for peak_index in peak_indices:
         cv2.circle(
             img_contour,
@@ -149,7 +154,7 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
     # ----------------------
     # --- classify edges ---
     # ----------------------
-    def classify_edge(edge_contour, piece_center, flat_thresh=5.0):
+    def classify_edge(edge_contour, piece_center, flat_thresh=5.0) -> EdgeType:
         pts = edge_contour[:, 0, :]  # Nx2
         p0, p1 = pts[0], pts[-1]
 
@@ -157,7 +162,7 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
         edge_vec = p1 - p0
         edge_len = np.linalg.norm(edge_vec)
         if edge_len < 1e-6:
-            return 0
+            return EdgeType.FLAT
 
         # Unit normal to the edge
         normal = np.array([-edge_vec[1], edge_vec[0]]) / edge_len
@@ -174,7 +179,7 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
 
         # Flat check
         if max_dev < flat_thresh:
-            return FLAT_EDGE
+            return EdgeType.FLAT
 
         # Determine sign of deviation at the most extreme point
         idx_max = np.argmax(np.abs(distances))
@@ -186,9 +191,9 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
         center_side = np.sign(np.dot(vec_center, normal))
 
         if extreme_sign == center_side:
-            return FEMALE_EDGE
+            return EdgeType.FEMALE
         else:
-            return MALE_EDGE
+            return EdgeType.MALE
 
     ###############################################################
     # Normalize contours
@@ -294,13 +299,14 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
     ###############################################################
     # Plot edges over the actual contour in the image
     ###############################################################
-    #TODO(matte): fix this plot to show also the image, fix list, list contains cv2
+    # TODO(matte): fix this plot to show also the image, fix list, list contains cv2
     img_contour = cv2.cvtColor(piece.img_thresh, cv2.COLOR_GRAY2BGR)
     for edge in list_edges:
         plt.plot(
             edge.contour[:, 0, 0],
             edge.contour[:, 0, 1],
-            c=COLORS_GENDER[edge.edge_type],
+            # COLORS_GENDER[edge.edge_type],
+            c=EdgeColorType[edge.edge_type.name].value,
         )
     plt.gca().set_aspect("equal", adjustable="box")
     plt.savefig(path_contour + f"{piece.piece_id}.png")
@@ -314,7 +320,7 @@ def get_edges(piece: Piece, prominence=PROMINENCE) -> Piece:
         plt.plot(
             edge.normalized_contour[:, 0, 0],
             edge.normalized_contour[:, 0, 1],
-            c=COLORS_GENDER[edge.edge_type],
+            c=EdgeColorType[edge.edge_type.name].value,
         )
     plt.gca().set_aspect("equal", adjustable="box")
     plt.savefig(path_edges + f"{piece.piece_id}.png")
