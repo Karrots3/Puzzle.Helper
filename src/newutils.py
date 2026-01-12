@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -7,6 +9,7 @@ def plt_np_3ch(
     size_height: int = 3,
     max_col: int = 5,
     ibw: int | list[int] | range | None = None,
+    out_path: str | Path | None = None,
 ):
     if ibw is None:
         ibw = []
@@ -37,4 +40,8 @@ def plt_np_3ch(
         else:
             ax.remove()
     plt.tight_layout()
-    plt.show()
+
+    if out_path is not None:
+        plt.savefig(out_path, bbox_inches="tight")
+    else:
+        plt.show()

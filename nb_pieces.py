@@ -5,115 +5,45 @@ app = marimo.App(width="full")
 
 with app.setup:
     # Initialization code that runs before all other cells
-    from enum import Enum
     from itertools import combinations
     from math import sqrt
     from pathlib import Path
-
-    import cv2 as cv
     import marimo as mo
+    import cv2 as cv
+
     import numpy as np
     from scipy.signal import find_peaks
-    from src.classes import LoopingList, EdgeType, EdgeColor, Edge, Piece
 
+    from src.classes import (
+        ContourError,
+        Edge,
+        EdgeColor,
+        EdgeType,
+        LoopingList,
+        Piece,
+        PipelineProcessImgParams,
+    )
     from src.newutils import plt_np_3ch
 
 
 @app.cell
 def _():
-    mo.md(
-        r"""
+    mo.md(r"""
     # Classes definitions for this notebook
-    """
-    )
+    """)
     return
-
-
-# @app.class_definition
-# class EdgeType(Enum):
-#    flat = 0
-#    man = 1
-#    woman = -1
-#
-# @app.class_definition
-# class EdgeColor(Enum):
-#    flat = (0, 255, 0)
-#    man = (0, 0, 255)
-#    woman = (255, 0, 0)
-#
-# @app.class_definition
-# class Edge:
-#    def __init__(
-#        self,
-#        edge_id: int,
-#        edge_type: str,
-#        edge_color: tuple[int, int, int],
-#        edge_contour: np.ndarray,
-#    ):
-#        self.edge_id = edge_id
-#        self.edge_type = edge_type
-#        self.edge_color = edge_color
-#        self.edge_contour = edge_contour
-#
-#
-# @app.class_definition
-# class Piece:
-#    def __init__(
-#        self,
-#        piece_id: int,
-#        rgb_img: np.ndarray,
-#        contour: np.ndarray,
-#        edge_list: list[Edge],
-#    ):
-#        self.piece_id = piece_id
-#        self.rgb_img = rgb_img
-#        self.contour = contour
-#        self.edge_list = edge_list
-
-
-@app.class_definition
-class PipelineProcessImgParams:
-    def __init__(
-        self,
-        radius: float = 0.6,
-        shift_x: float = 1.1,
-        shift_y: float = 0.86,
-        thresh: int = 110,
-        min_area=20,
-        max_area=10000,
-        max_value=255,
-        min_perimeter=100,
-        max_perimeter=1000,
-        prominence=10500,
-        flat_threshold=20,
-    ):
-        self.crop_radius = radius
-        self.crop_shift_x = shift_x
-        self.crop_shift_y = shift_y
-        self.th_thresh = thresh
-        self.th_maxvalue = max_value
-        self.filter_contour_min_area = min_area
-        self.filter_contour_max_area = max_area
-        self.filter_contour_min_perimeter = min_perimeter
-        self.filter_contour_max_perimeter = max_perimeter
-        self.edges_peaks_prominence = prominence
-        self.edge_type = EdgeType
-        self.edge_color = EdgeColor
-        self.flat_threshold = flat_threshold
 
 
 @app.cell(hide_code=True)
 def _():
-    mo.md(
-        r"""
+    mo.md(r"""
     # Definitions for pipeline imagine processing
-    """
-    )
+    """)
     return
 
 
 @app.function
-def crop_img(
+def _crop_img(
     img: np.ndarray, params: PipelineProcessImgParams, PLOT: bool = False
 ) -> np.ndarray:
     # Get Params
@@ -150,7 +80,7 @@ def crop_img(
 
 
 @app.function
-def treshold_img(
+def _treshold_img(
     img: np.ndarray, params: PipelineProcessImgParams, PLOT: bool = False
 ) -> np.ndarray:
     # Get Params
@@ -168,7 +98,7 @@ def treshold_img(
 
 
 @app.function
-def get_contour(
+def _get_contour(
     bw_img: np.ndarray, params: PipelineProcessImgParams, PLOT: bool = False
 ) -> np.ndarray | None:
     # Get params
@@ -204,19 +134,30 @@ def get_contour(
 
         plt_np_3ch(_plt_images, ibw=0, size_height=3)
 
-    if len(filtered_contours) > 1:
-        print("Filtered Contour Areas:")
-        for contour in filtered_contours:
-            area = cv.contourArea(contour)
-            print(f" - Area: {area}")
+    # Calculate areas for error reporting
+    contour_areas = [cv.contourArea(contour) for contour in filtered_contours]
 
-    contour = filtered_contours[0] if len(filtered_contours) > 0 else None
+    # Raise exception if we don't have exactly one contour
+    if len(filtered_contours) == 0:
+        raise ContourError(
+            message="No contours found after filtering",
+            num_contours=0,
+            contour_areas=[],
+        )
+    elif len(filtered_contours) > 1:
+        raise ContourError(
+            message=f"Found {len(filtered_contours)} contours, expected exactly 1",
+            num_contours=len(filtered_contours),
+            contour_areas=contour_areas,
+        )
+
+    contour = filtered_contours[0]
 
     return contour
 
 
 @app.function
-def get_corner_indices(
+def _get_corner_indices(
     bw_img: np.ndarray,
     contour: np.ndarray,
     params: PipelineProcessImgParams,
@@ -351,7 +292,7 @@ def get_corner_indices(
 
 
 @app.function
-def get_edges(
+def _get_edges(
     bw_img: np.ndarray,
     contour: np.ndarray,
     corner_indices: list[int],
@@ -445,28 +386,26 @@ def get_edges(
 
 @app.cell
 def _():
-    mo.md(
-        r"""
+    mo.md(r"""
     ## Final Pipeline Imagine Processing
-    """
-    )
+    """)
     return
 
 
 @app.function
 def PipelineProcessImg(path: Path | str, params, PLOT: bool = False):
     bgr_img = cv.imread(str(path))
-    bgr_img = crop_img(bgr_img, params, PLOT)
+    bgr_img = _crop_img(bgr_img, params, PLOT)
     rgb_img = cv.cvtColor(bgr_img, cv.COLOR_BGR2RGB)
     bw_img = cv.cvtColor(bgr_img, cv.COLOR_BGR2GRAY)
 
     if PLOT:
         plt_np_3ch([rgb_img, bw_img], ibw=1, size_height=3)
 
-    img = treshold_img(bw_img, params, PLOT)
-    contour = get_contour(img, params, PLOT)
-    corner_indices = get_corner_indices(bw_img, contour, params, PLOT)
-    edges = get_edges(bw_img, contour, corner_indices, params, PLOT)
+    img = _treshold_img(bw_img, params, PLOT)
+    contour = _get_contour(img, params, PLOT)
+    corner_indices = _get_corner_indices(bw_img, contour, params, PLOT)
+    edges = _get_edges(bw_img, contour, corner_indices, params, PLOT)
 
     piece = Piece(piece_id=0, rgb_img=rgb_img, contour=contour, edge_list=edges)
     return piece
@@ -474,24 +413,22 @@ def PipelineProcessImg(path: Path | str, params, PLOT: bool = False):
 
 @app.cell
 def _():
-    mo.md(
-        r"""
+    mo.md(r"""
     # Running Pipeline
-    """
-    )
+    """)
     return
 
 
 @app.cell
 def _():
-    str_img = "./data/0006.JPG"
+    str_img = "data/0002.JPG"
     params = PipelineProcessImgParams()
     return params, str_img
 
 
 @app.cell
 def _(params, str_img):
-    PipelineProcessImg(str_img, params, PLOT=False)
+    PipelineProcessImg(str_img, params, PLOT=True)
     return
 
 
