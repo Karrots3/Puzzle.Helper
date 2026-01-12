@@ -1,0 +1,1 @@
+"""Puzzle piece matching pipeline."""
