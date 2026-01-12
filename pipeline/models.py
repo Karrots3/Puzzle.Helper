@@ -35,6 +35,30 @@ class Edge:
         self.edge_color = edge_color
         self.edge_contour = edge_contour
         self._normalized_contour: Optional[np.ndarray] = None
+        self._straight_length: Optional[float] = None
+        self._embedding: Optional[np.ndarray] = None
+    
+    @property
+    def straight_length(self) -> float:
+        """Compute and cache straight-line length of edge."""
+        if self._straight_length is None:
+            p0 = self.edge_contour[0, 0, :]
+            p1 = self.edge_contour[-1, 0, :]
+            self._straight_length = float(np.linalg.norm(p1 - p0))
+        return self._straight_length
+    
+    def get_embedding(self) -> np.ndarray:
+        """Compute and cache embedding (distance from baseline)."""
+        if self._embedding is None:
+            len_contour = self.edge_contour.shape[0]
+            line = np.linspace(
+                self.edge_contour[0], self.edge_contour[-1], len_contour
+            )
+            self._embedding = np.array([
+                np.linalg.norm(self.edge_contour[i] - line[i])
+                for i in range(len_contour)
+            ])
+        return self._embedding
     
     @property
     def normalized_contour(self) -> np.ndarray:
